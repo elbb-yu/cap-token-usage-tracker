@@ -75,10 +75,12 @@ func normalizeDashboardPreferences(input DashboardPreferences) (DashboardPrefere
 		if input.TimeRangeStart == "" || input.TimeRangeEnd == "" {
 			return DashboardPreferences{}, fmt.Errorf("time_range_start and time_range_end must be supplied together")
 		}
-		startDate, startErr := time.Parse("2006-01-02", input.TimeRangeStart)
-		endDate, endErr := time.Parse("2006-01-02", input.TimeRangeEnd)
-		if startErr != nil || endErr != nil || endDate.Before(startDate) {
-			return DashboardPreferences{}, fmt.Errorf("custom time range must contain ordered YYYY-MM-DD dates")
+		startTime, startLegacy, startErr := parseDashboardRangeTime(input.TimeRangeStart)
+		endTime, endLegacy, endErr := parseDashboardRangeTime(input.TimeRangeEnd)
+		if startErr != nil || endErr != nil || startLegacy != endLegacy ||
+			(startLegacy && endTime.Before(startTime)) ||
+			(!startLegacy && !startTime.Before(endTime)) {
+			return DashboardPreferences{}, fmt.Errorf("custom time range must contain ordered YYYY-MM-DD dates or RFC3339 timestamps")
 		}
 		start, end = input.TimeRangeStart, input.TimeRangeEnd
 	}
@@ -91,6 +93,14 @@ func normalizeDashboardPreferences(input DashboardPreferences) (DashboardPrefere
 		TimeRangeStart:         start,
 		TimeRangeEnd:           end,
 	}, nil
+}
+
+func parseDashboardRangeTime(value string) (time.Time, bool, error) {
+	if date, err := time.Parse("2006-01-02", value); err == nil {
+		return date, true, nil
+	}
+	timestamp, err := time.Parse(time.RFC3339, value)
+	return timestamp, false, err
 }
 
 func normalizeHiddenColumns(input, allowed []string, field string) ([]string, error) {

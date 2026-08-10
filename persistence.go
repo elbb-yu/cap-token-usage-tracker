@@ -456,7 +456,18 @@ func (s *Store) run(actor *storeActor) {
 				// previous transient flush failure must not make subsequent usage vanish.
 				item.resp <- actor.record(item.usage)
 			case queryCommand:
-				if err := actor.retryFailedFlush(time.Now().UTC()); err != nil {
+				now := time.Now().UTC()
+				if requiresExactStats(item.queryRange) {
+					if err := actor.flush(now, true); err != nil {
+						actor.lastFlushErr = err
+						item.resp <- queryResult{err: err}
+						continue
+					}
+					stats, err := actor.queryExactStats(item.queryRange, item.source, now)
+					item.resp <- queryResult{stats: stats, err: err}
+					continue
+				}
+				if err := actor.retryFailedFlush(now); err != nil {
 					item.resp <- queryResult{err: err}
 					continue
 				}
@@ -464,7 +475,7 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- queryResult{err: withStatus(400, "%v", err)}
 					continue
 				}
-				stats := buildStatsForRange(actor.data, actor.since, actor.lastUsed, item.queryRange, item.source, time.Now().UTC())
+				stats := buildStatsForRange(actor.data, actor.since, actor.lastUsed, item.queryRange, item.source, now)
 				item.resp <- queryResult{stats: stats}
 			case requestQueryCommand:
 				now := time.Now().UTC()
@@ -1563,6 +1574,61 @@ func (a *storeActor) queryRequests(queryRange usageRange, offset, limit int, mod
 		return RequestPage{}, fmt.Errorf("query request details: %w", err)
 	}
 	return page, nil
+}
+
+func requiresExactStats(queryRange usageRange) bool {
+	return queryRange.Name == "custom" &&
+		(queryRange.Start.Second() != 0 || queryRange.Start.Nanosecond() != 0 ||
+			queryRange.End.Second() != 0 || queryRange.End.Nanosecond() != 0)
+}
+
+func (a *storeActor) queryExactStats(queryRange usageRange, source string, now time.Time) (StatsResponse, error) {
+	if err := queryRange.validate(); err != nil {
+		return StatsResponse{}, withStatus(400, "%v", err)
+	}
+	data := make(map[aggregateKey]Counters)
+	err := a.db.View(func(tx *bolt.Tx) error {
+		requests := tx.Bucket(requestsBucket)
+		if requests == nil {
+			return errors.New("requests bucket is missing")
+		}
+		cursor := requests.Cursor()
+		for key, value := cursor.Last(); key != nil; key, value = cursor.Prev() {
+			if len(key) != 16 || value == nil {
+				continue
+			}
+			requestedAt := time.Unix(0, decodeInt64(key[:8])).UTC()
+			if !requestedAt.Before(queryRange.End) {
+				continue
+			}
+			if requestedAt.Before(queryRange.Start) {
+				break
+			}
+			var item RequestDetail
+			if err := json.Unmarshal(value, &item); err != nil {
+				return fmt.Errorf("decode request detail: %w", err)
+			}
+			dimensions := sanitizeDimensionsSource(item.Dimensions)
+			counters := item.Counters
+			if item.LatencyNS > 0 {
+				counters.TotalLatencyNS = item.LatencyNS
+				counters.LatencySamples = 1
+			}
+			if item.TTFTNS > 0 {
+				counters.TotalTTFTNS = item.TTFTNS
+				counters.TTFTSamples = 1
+			}
+			bucket := aggregateKey{Hour: requestedAt.Truncate(time.Minute).Unix(), Dimensions: dimensions}
+			combined := data[bucket]
+			combined.add(counters)
+			data[bucket] = combined
+		}
+		return nil
+	})
+	if err != nil {
+		return StatsResponse{}, fmt.Errorf("query exact stats: %w", err)
+	}
+	return buildStatsForRange(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, source, now), nil
 }
 
 func retentionCutoff(config Config, now time.Time) int64 {
