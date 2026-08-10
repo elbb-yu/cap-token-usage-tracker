@@ -225,7 +225,7 @@ func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (plug
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	stats, err := r.store.queryStatsBySource(queryRange, request.Query.Get("source"))
+	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account")))
 	if err != nil {
 		status := errorHTTPStatus(err)
 		return jsonResponse(status, map[string]any{"error": err.Error()}), nil
@@ -251,7 +251,7 @@ func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (p
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	page, err := r.store.queryRequestPageBySource(queryRange, offset, limit, request.Query.Get("model"), request.Query.Get("source"), request.Query.Get("result"))
+	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account")), request.Query.Get("result"))
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
@@ -269,7 +269,7 @@ func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (plug
 	if store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	costs, err := store.queryCostsBySource(queryRange, request.Query.Get("source"))
+	costs, err := store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account")))
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}

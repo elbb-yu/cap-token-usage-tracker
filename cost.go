@@ -83,7 +83,7 @@ type costQuerySnapshot struct {
 	PriceRevision uint64
 	HighWater     uint64
 	Generation    uint64
-	Source        string
+	Filter        usageFilter
 }
 
 type costCacheKey struct {
@@ -93,7 +93,7 @@ type costCacheKey struct {
 	PriceRevision uint64
 	HighWater     uint64
 	Generation    uint64
-	Source        string
+	Filter        usageFilter
 }
 
 type costFlight struct {
@@ -173,17 +173,21 @@ func (s *Store) QueryCosts(rangeName string) (CostResponse, error) {
 }
 
 func (s *Store) queryCosts(queryRange usageRange) (CostResponse, error) {
-	return s.queryCostsBySource(queryRange, "")
+	return s.queryCostsByFilter(queryRange, usageFilter{})
 }
 
 func (s *Store) queryCostsBySource(queryRange usageRange, source string) (CostResponse, error) {
+	return s.queryCostsByFilter(queryRange, newUsageFilter(source, "", ""))
+}
+
+func (s *Store) queryCostsByFilter(queryRange usageRange, filter usageFilter) (CostResponse, error) {
 	s.stateMu.RLock()
 	defer s.stateMu.RUnlock()
 	if s.closed {
 		return CostResponse{}, errors.New("store is closed")
 	}
 	resp := make(chan costSnapshotResult, 1)
-	s.commands <- costSnapshotCommand{queryRange: queryRange, source: source, resp: resp}
+	s.commands <- costSnapshotCommand{queryRange: queryRange, filter: filter, resp: resp}
 	result := <-resp
 	if result.err != nil {
 		return CostResponse{}, result.err
@@ -196,7 +200,7 @@ func (s *Store) queryCostsBySource(queryRange usageRange, source string) (CostRe
 		PriceRevision: snapshot.PriceRevision,
 		HighWater:     snapshot.HighWater,
 		Generation:    snapshot.Generation,
-		Source:        snapshot.Source,
+		Filter:        snapshot.Filter,
 	}
 
 	s.costMu.Lock()
@@ -294,7 +298,7 @@ func (s *Store) scanCosts(snapshot costQuerySnapshot) (CostResponse, error) {
 				continue
 			}
 			request.Dimensions = sanitizeDimensionsSource(request.Dimensions)
-			if snapshot.Source != "" && request.Source != snapshot.Source {
+			if !snapshot.Filter.matches(request.Dimensions) {
 				continue
 			}
 			request.EstimatedCost = nil

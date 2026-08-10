@@ -39,6 +39,7 @@ type pluginRuntime struct {
 	routes           registeredRoutes
 	modelsDevFetcher *modelsDevFetcher
 	exchangeRates    *exchangeRateService
+	authResolver     *authIdentityResolver
 	priceSyncing     bool
 }
 
@@ -116,6 +117,7 @@ func (r *pluginRuntime) handleUsage(raw []byte) (map[string]any, error) {
 	if err != nil {
 		return nil, withStatus(400, "%v", err)
 	}
+	r.resolveUsageIdentity(&usage)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.store == nil {
@@ -137,6 +139,7 @@ func (r *pluginRuntime) shutdown() error {
 	r.config = Config{}
 	r.routes = registeredRoutes{}
 	r.exchangeRates = nil
+	r.authResolver = nil
 	r.mu.Unlock()
 	if store == nil {
 		return nil

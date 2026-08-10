@@ -18,7 +18,7 @@ func TestDecodeUsageSDKJSON(t *testing.T) {
 		Alias:           "opus",
 		APIKey:          "must-not-survive",
 		AuthID:          "secret-auth",
-		AuthIndex:       "2",
+		AuthIndex:       "stable-auth-index",
 		AuthType:        "oauth",
 		Source:          "anthropic",
 		ReasoningEffort: "high",
@@ -59,10 +59,29 @@ func TestDecodeUsageSDKJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"must-not-survive", "secret-auth", "private failure body"} {
+	for _, secret := range []string{"must-not-survive", "secret-auth", "private failure body", record.AuthIndex} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("sensitive value leaked: %s", secret)
 		}
+	}
+}
+
+func TestDecodeUsageKeepsAuthIndexTransient(t *testing.T) {
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	raw := []byte("{\"provider\":\"codex\",\"source\":\"cli\",\"auth_index\":\"stable-auth-index\"}")
+	usage, err := decodeUsage(raw, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.authIndex != "stable-auth-index" {
+		t.Fatalf("transient auth index = %q", usage.authIndex)
+	}
+	encoded, err := json.Marshal(usage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(encoded), "stable-auth-index") || strings.Contains(string(encoded), "auth_index") {
+		t.Fatalf("auth index leaked in normalized usage JSON: %s", encoded)
 	}
 }
 

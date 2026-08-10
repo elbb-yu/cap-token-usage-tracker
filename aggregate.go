@@ -14,11 +14,35 @@ type Dimensions struct {
 	Model           string `json:"model"`
 	Alias           string `json:"alias"`
 	Source          string `json:"source"`
+	AuthProvider    string `json:"auth_provider,omitempty"`
+	AuthAccount     string `json:"auth_account,omitempty"`
 	AuthType        string `json:"auth_type"`
 	ServiceTier     string `json:"service_tier"`
 	ReasoningEffort string `json:"reasoning_effort"`
 	Failed          bool   `json:"failed"`
 	FailureStatus   int    `json:"failure_status"`
+}
+
+// usageFilter scopes every analytics surface to the same persisted dimensions.
+// Empty fields intentionally mean no restriction, which preserves legacy callers.
+type usageFilter struct {
+	Source       string
+	AuthProvider string
+	AuthAccount  string
+}
+
+func newUsageFilter(source, authProvider, authAccount string) usageFilter {
+	return usageFilter{
+		Source:       normalizeDimension(source),
+		AuthProvider: normalizeDimension(authProvider),
+		AuthAccount:  normalizeDimension(authAccount),
+	}
+}
+
+func (f usageFilter) matches(dimensions Dimensions) bool {
+	return (f.Source == "" || dimensions.Source == f.Source) &&
+		(f.AuthProvider == "" || dimensions.AuthProvider == f.AuthProvider) &&
+		(f.AuthAccount == "" || dimensions.AuthAccount == f.AuthAccount)
 }
 
 type Counters struct {
@@ -114,16 +138,23 @@ type ModelSeriesPoint struct {
 }
 
 type StatsResponse struct {
-	SchemaVersion uint32             `json:"schema_version"`
-	GeneratedAt   time.Time          `json:"generated_at"`
-	Range         string             `json:"range"`
-	RetainedSince time.Time          `json:"retained_since"`
-	LastUsed      time.Time          `json:"last_used"`
-	Summary       Counters           `json:"summary"`
-	Groups        []GroupStats       `json:"groups"`
-	Series        []SeriesPoint      `json:"series"`
-	ModelSeries   []ModelSeriesPoint `json:"model_series"`
-	Sources       []string           `json:"sources"`
+	SchemaVersion  uint32               `json:"schema_version"`
+	GeneratedAt    time.Time            `json:"generated_at"`
+	Range          string               `json:"range"`
+	RetainedSince  time.Time            `json:"retained_since"`
+	LastUsed       time.Time            `json:"last_used"`
+	Summary        Counters             `json:"summary"`
+	Groups         []GroupStats         `json:"groups"`
+	Series         []SeriesPoint        `json:"series"`
+	ModelSeries    []ModelSeriesPoint   `json:"model_series"`
+	Sources        []string             `json:"sources"`
+	AuthIdentities []AuthIdentityOption `json:"auth_identities"`
+}
+
+type AuthIdentityOption struct {
+	Provider string `json:"provider"`
+	Account  string `json:"account"`
+	Label    string `json:"label"`
 }
 
 type usageRange struct {
@@ -141,6 +172,10 @@ func buildStats(data map[aggregateKey]Counters, since, lastUsed time.Time, reque
 }
 
 func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, source string, now time.Time) StatsResponse {
+	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, "", ""), now)
+}
+
+func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time) StatsResponse {
 	groups := make(map[Dimensions]Counters)
 	series := make(map[int64]Counters)
 	modelSeries := make(map[struct {
@@ -149,6 +184,7 @@ func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Tim
 	}]Counters)
 	summary := Counters{}
 	sources := make(map[string]struct{})
+	identities := make(map[usageIdentity]struct{})
 	for key, counters := range data {
 		bucketTime := time.Unix(key.Hour, 0).UTC()
 		if !queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start) {
@@ -161,7 +197,10 @@ func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Tim
 		if dimensions.Source != "" {
 			sources[dimensions.Source] = struct{}{}
 		}
-		if source != "" && dimensions.Source != source {
+		if dimensions.AuthProvider != "" && dimensions.AuthAccount != "" {
+			identities[usageIdentity{Provider: dimensions.AuthProvider, Account: dimensions.AuthAccount}] = struct{}{}
+		}
+		if !filter.matches(dimensions) {
 			continue
 		}
 		group := groups[dimensions]
@@ -242,18 +281,32 @@ func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Tim
 		sourceValues = append(sourceValues, value)
 	}
 	sort.Strings(sourceValues)
+	identityValues := make([]AuthIdentityOption, 0, len(identities))
+	for identity := range identities {
+		identityValues = append(identityValues, AuthIdentityOption{Provider: identity.Provider, Account: identity.Account, Label: identity.Provider + "-" + identity.Account})
+	}
+	sort.Slice(identityValues, func(i, j int) bool {
+		if identityValues[i].Label != identityValues[j].Label {
+			return identityValues[i].Label < identityValues[j].Label
+		}
+		if identityValues[i].Provider != identityValues[j].Provider {
+			return identityValues[i].Provider < identityValues[j].Provider
+		}
+		return identityValues[i].Account < identityValues[j].Account
+	})
 
 	return StatsResponse{
-		SchemaVersion: 1,
-		GeneratedAt:   now.UTC(),
-		Range:         queryRange.Name,
-		RetainedSince: since.UTC(),
-		LastUsed:      lastUsed.UTC(),
-		Summary:       summary,
-		Groups:        groupRows,
-		Series:        points,
-		ModelSeries:   modelPoints,
-		Sources:       sourceValues,
+		SchemaVersion:  1,
+		GeneratedAt:    now.UTC(),
+		Range:          queryRange.Name,
+		RetainedSince:  since.UTC(),
+		LastUsed:       lastUsed.UTC(),
+		Summary:        summary,
+		Groups:         groupRows,
+		Series:         points,
+		ModelSeries:    modelPoints,
+		Sources:        sourceValues,
+		AuthIdentities: identityValues,
 	}
 }
 
@@ -321,6 +374,8 @@ func compareDimensions(left, right Dimensions) int {
 		cmp.Compare(left.Model, right.Model),
 		cmp.Compare(left.Alias, right.Alias),
 		cmp.Compare(left.Source, right.Source),
+		cmp.Compare(left.AuthProvider, right.AuthProvider),
+		cmp.Compare(left.AuthAccount, right.AuthAccount),
 		cmp.Compare(left.AuthType, right.AuthType),
 		cmp.Compare(left.ServiceTier, right.ServiceTier),
 		cmp.Compare(left.ReasoningEffort, right.ReasoningEffort),

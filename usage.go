@@ -17,6 +17,7 @@ type normalizedUsage struct {
 	LatencyNS   uint64
 	TTFTNS      uint64
 	Counters    Counters
+	authIndex   string
 }
 
 func decodeUsage(raw []byte, now time.Time) (normalizedUsage, error) {
@@ -73,6 +74,7 @@ func decodeUsage(raw []byte, now time.Time) (normalizedUsage, error) {
 		RequestedAt: requestedAt,
 		LatencyNS:   positiveDurationNS(root, "Latency", "latency", "latency_ns"),
 		TTFTNS:      positiveDurationNS(root, "TTFT", "ttft", "ttft_ns"),
+		authIndex:   strings.TrimSpace(firstString(root, "AuthIndex", "auth_index")),
 		Counters: Counters{
 			Requests:            1,
 			FailedRequests:      boolCount(failed),

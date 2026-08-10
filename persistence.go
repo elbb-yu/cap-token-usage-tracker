@@ -30,7 +30,7 @@ var (
 	dashboardPreferencesKey = []byte("dashboard_preferences")
 )
 
-const persistenceSchemaVersion uint64 = 5
+const persistenceSchemaVersion uint64 = 6
 
 type recordCommand struct {
 	usage normalizedUsage
@@ -39,7 +39,7 @@ type recordCommand struct {
 
 type queryCommand struct {
 	queryRange usageRange
-	source     string
+	filter     usageFilter
 	resp       chan queryResult
 }
 
@@ -53,7 +53,7 @@ type requestQueryCommand struct {
 	offset     int
 	limit      int
 	model      string
-	source     string
+	filter     usageFilter
 	result     string
 	resp       chan requestQueryResult
 }
@@ -90,7 +90,7 @@ type observedModelsResult struct {
 }
 type costSnapshotCommand struct {
 	queryRange usageRange
-	source     string
+	filter     usageFilter
 	resp       chan costSnapshotResult
 }
 type costSnapshotResult struct {
@@ -236,12 +236,16 @@ func (s *Store) Query(rangeName string) (StatsResponse, error) {
 }
 
 func (s *Store) queryStats(queryRange usageRange) (StatsResponse, error) {
-	return s.queryStatsBySource(queryRange, "")
+	return s.queryStatsByFilter(queryRange, usageFilter{})
 }
 
 func (s *Store) queryStatsBySource(queryRange usageRange, source string) (StatsResponse, error) {
+	return s.queryStatsByFilter(queryRange, newUsageFilter(source, "", ""))
+}
+
+func (s *Store) queryStatsByFilter(queryRange usageRange, filter usageFilter) (StatsResponse, error) {
 	resp := make(chan queryResult, 1)
-	if err := s.send(queryCommand{queryRange: queryRange, source: source, resp: resp}); err != nil {
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, resp: resp}); err != nil {
 		return StatsResponse{}, err
 	}
 	result := <-resp
@@ -257,12 +261,16 @@ func (s *Store) QueryRequests(rangeName string, offset, limit int, model string)
 }
 
 func (s *Store) queryRequestPage(queryRange usageRange, offset, limit int, model string) (RequestPage, error) {
-	return s.queryRequestPageBySource(queryRange, offset, limit, model, "", "")
+	return s.queryRequestPageByFilter(queryRange, offset, limit, model, usageFilter{}, "")
 }
 
 func (s *Store) queryRequestPageBySource(queryRange usageRange, offset, limit int, model, source, resultFilter string) (RequestPage, error) {
+	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, "", ""), resultFilter)
+}
+
+func (s *Store) queryRequestPageByFilter(queryRange usageRange, offset, limit int, model string, filter usageFilter, resultFilter string) (RequestPage, error) {
 	resp := make(chan requestQueryResult, 1)
-	if err := s.send(requestQueryCommand{queryRange: queryRange, offset: offset, limit: limit, model: model, source: source, result: resultFilter, resp: resp}); err != nil {
+	if err := s.send(requestQueryCommand{queryRange: queryRange, offset: offset, limit: limit, model: model, filter: filter, result: resultFilter, resp: resp}); err != nil {
 		return RequestPage{}, err
 	}
 	result := <-resp
@@ -463,7 +471,7 @@ func (s *Store) run(actor *storeActor) {
 						item.resp <- queryResult{err: err}
 						continue
 					}
-					stats, err := actor.queryExactStats(item.queryRange, item.source, now)
+					stats, err := actor.queryExactStats(item.queryRange, item.filter, now)
 					item.resp <- queryResult{stats: stats, err: err}
 					continue
 				}
@@ -475,7 +483,7 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- queryResult{err: withStatus(400, "%v", err)}
 					continue
 				}
-				stats := buildStatsForRange(actor.data, actor.since, actor.lastUsed, item.queryRange, item.source, now)
+				stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now)
 				item.resp <- queryResult{stats: stats}
 			case requestQueryCommand:
 				now := time.Now().UTC()
@@ -484,7 +492,7 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- requestQueryResult{err: err}
 					continue
 				}
-				page, err := actor.queryRequests(item.queryRange, item.offset, item.limit, item.model, item.source, item.result, now)
+				page, err := actor.queryRequests(item.queryRange, item.offset, item.limit, item.model, item.filter, item.result, now)
 				item.resp <- requestQueryResult{page: page, err: err}
 			case preferencesQueryCommand:
 				item.resp <- preferencesResult{preferences: cloneDashboardPreferences(actor.dashboardPreferences)}
@@ -524,7 +532,7 @@ func (s *Store) run(actor *storeActor) {
 					PriceRevision: actor.priceRevision,
 					HighWater:     actor.nextRequestSeq,
 					Generation:    actor.costGeneration,
-					Source:        item.source,
+					Filter:        item.filter,
 				}, err: err}
 			case resetCommand:
 				if err := actor.retryFailedFlush(time.Now().UTC()); err != nil {
@@ -1499,7 +1507,7 @@ func (a *storeActor) reset() error {
 	return nil
 }
 
-func (a *storeActor) queryRequests(queryRange usageRange, offset, limit int, model, source, resultFilter string, now time.Time) (RequestPage, error) {
+func (a *storeActor) queryRequests(queryRange usageRange, offset, limit int, model string, filter usageFilter, resultFilter string, now time.Time) (RequestPage, error) {
 	if err := queryRange.validate(); err != nil {
 		return RequestPage{}, withStatus(400, "%v", err)
 	}
@@ -1554,7 +1562,7 @@ func (a *storeActor) queryRequests(queryRange usageRange, offset, limit int, mod
 			if model != "" && itemModel != model {
 				continue
 			}
-			if source != "" && item.Source != source {
+			if !filter.matches(item.Dimensions) {
 				continue
 			}
 			if (resultFilter == "success" && item.Failed) || (resultFilter == "failed" && !item.Failed) {
@@ -1582,7 +1590,7 @@ func requiresExactStats(queryRange usageRange) bool {
 			queryRange.End.Second() != 0 || queryRange.End.Nanosecond() != 0)
 }
 
-func (a *storeActor) queryExactStats(queryRange usageRange, source string, now time.Time) (StatsResponse, error) {
+func (a *storeActor) queryExactStats(queryRange usageRange, filter usageFilter, now time.Time) (StatsResponse, error) {
 	if err := queryRange.validate(); err != nil {
 		return StatsResponse{}, withStatus(400, "%v", err)
 	}
@@ -1628,7 +1636,7 @@ func (a *storeActor) queryExactStats(queryRange usageRange, source string, now t
 	if err != nil {
 		return StatsResponse{}, fmt.Errorf("query exact stats: %w", err)
 	}
-	return buildStatsForRange(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, source, now), nil
+	return buildStatsForRangeWithFilter(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, filter, now), nil
 }
 
 func retentionCutoff(config Config, now time.Time) int64 {

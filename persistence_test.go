@@ -114,6 +114,39 @@ func TestExactCustomStatsUseRequestBoundariesAndSourceFilter(t *testing.T) {
 	}
 }
 
+func TestAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
+	config := testConfig(t)
+	config.SyncOnRecord = true
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := nowUTC().Add(-time.Minute)
+	for _, usage := range []normalizedUsage{
+		{Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}, RequestedAt: now, Counters: Counters{Requests: 1, InputTokens: 2, TotalTokens: 2}},
+		{Dimensions: Dimensions{Model: "beta", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}, RequestedAt: now.Add(time.Second), Counters: Counters{Requests: 1, InputTokens: 4, TotalTokens: 4}},
+	} {
+		if err := store.Record(usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queryRange := usageRange{Name: "24h", Start: now.Add(-time.Hour)}
+	filter := newUsageFilter("cli", "Codex", "user@example.com")
+	stats, err := store.queryStatsByFilter(queryRange, filter)
+	if err != nil || stats.Summary.Requests != 1 || stats.Summary.TotalTokens != 2 || len(stats.AuthIdentities) != 2 {
+		t.Fatalf("filtered stats = %+v, %v", stats, err)
+	}
+	page, err := store.queryRequestPageByFilter(queryRange, 0, 100, "", filter, "")
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].AuthProvider != "Codex" {
+		t.Fatalf("filtered request page = %+v, %v", page, err)
+	}
+	costs, err := store.queryCostsByFilter(queryRange, filter)
+	if err != nil || costs.Summary.Requests != 1 {
+		t.Fatalf("filtered costs = %+v, %v", costs, err)
+	}
+}
+
 func TestMinuteAlignedCustomStatsUseAggregatePath(t *testing.T) {
 	start := time.Date(2026, 8, 8, 10, 30, 0, 0, time.UTC)
 	end := start.Add(time.Hour)
