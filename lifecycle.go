@@ -8,11 +8,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 var version = "dev"
+
+// maxSupportedRPCSchema is intentionally independent from the SDK's latest
+// schema. Future hosts may negotiate down to this verified contract without
+// the plugin claiming support for semantics it has not implemented.
+const maxSupportedRPCSchema uint32 = 3
 
 type lifecycleRequest struct {
 	ConfigYAML    []byte `json:"config_yaml"`
@@ -50,16 +54,13 @@ func (r *pluginRuntime) register(raw []byte) (registration, error) {
 	if err != nil {
 		return registration{}, err
 	}
-	if request.SchemaVersion > pluginabi.SchemaVersion {
-		return registration{}, fmt.Errorf("unsupported schema version %d", request.SchemaVersion)
-	}
 
 	r.lifecycleMu.Lock()
 	defer r.lifecycleMu.Unlock()
 	if err := r.applyConfig(config); err != nil {
 		return registration{}, err
 	}
-	return pluginRegistration(), nil
+	return pluginRegistration(negotiateRPCSchema(request.SchemaVersion)), nil
 }
 
 func (r *pluginRuntime) reconfigure(raw []byte) (registration, error) {
@@ -67,16 +68,23 @@ func (r *pluginRuntime) reconfigure(raw []byte) (registration, error) {
 	if err != nil {
 		return registration{}, err
 	}
-	if request.SchemaVersion > pluginabi.SchemaVersion {
-		return registration{}, fmt.Errorf("unsupported schema version %d", request.SchemaVersion)
-	}
 
 	r.lifecycleMu.Lock()
 	defer r.lifecycleMu.Unlock()
 	if err := r.applyConfig(config); err != nil {
 		return registration{}, err
 	}
-	return pluginRegistration(), nil
+	return pluginRegistration(negotiateRPCSchema(request.SchemaVersion)), nil
+}
+
+func negotiateRPCSchema(hostSchema uint32) uint32 {
+	if hostSchema == 0 {
+		return 1
+	}
+	if hostSchema < maxSupportedRPCSchema {
+		return hostSchema
+	}
+	return maxSupportedRPCSchema
 }
 
 func (r *pluginRuntime) applyConfig(config Config) error {
@@ -191,9 +199,9 @@ func decodeLifecycleConfigYAML(raw json.RawMessage) ([]byte, error) {
 	return nil, fmt.Errorf("config_yaml must be a base64/plain string or byte array")
 }
 
-func pluginRegistration() registration {
+func pluginRegistration(schemaVersion uint32) registration {
 	return registration{
-		SchemaVersion: pluginabi.SchemaVersion,
+		SchemaVersion: schemaVersion,
 		Metadata: pluginapi.Metadata{
 			Name:             "CAP Token Usage Tracker",
 			Version:          version,
