@@ -429,6 +429,38 @@ func TestManagementSourceFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
 	}
 }
 
+func TestManagementAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
+	config := testConfig(t)
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config, routes: registeredRoutes{
+		pluginID: "test", resourceStatsPath: "/v0/resource/plugins/test/stats", resourceRequestsPath: "/v0/resource/plugins/test/requests", resourceCostsPath: "/v0/resource/plugins/test/costs",
+	}}
+	defer runtime.shutdown()
+	for _, usage := range []normalizedUsage{
+		{Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 3}},
+		{Dimensions: Dimensions{Model: "beta", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 5}},
+	} {
+		if err := store.Record(usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query := url.Values{"range": []string{"24h"}, "source": []string{"cli"}, "auth_provider": []string{"Codex"}, "auth_account": []string{"user@example.com"}}
+	for _, path := range []string{runtime.routes.resourceStatsPath, runtime.routes.resourceRequestsPath, runtime.routes.resourceCostsPath} {
+		if path == runtime.routes.resourceRequestsPath {
+			query.Set("offset", "0")
+			query.Set("limit", "100")
+		}
+		request, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: path, Query: query})
+		response, err := runtime.handleManagement(request)
+		if err != nil || response.StatusCode != http.StatusOK || strings.Contains(string(response.Body), "\"auth_provider\":\"Antigravity\"") {
+			t.Fatalf("identity-filtered %s response: %+v, %v", path, response, err)
+		}
+	}
+}
+
 func TestDashboardSecurityContract(t *testing.T) {
 	response := dashboardResponse()
 	html := string(response.Body)

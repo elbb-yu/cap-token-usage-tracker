@@ -148,6 +148,8 @@ USD/CNY 切换只改变页面与 PNG 的显示：价格簿、后端 `*_usd` 字�
 | Windows | amd64 | `.dll` | `cap-token-usage-tracker.dll` | `plugins/windows/amd64/` |
 | macOS | arm64 | `.dylib` | `cap-token-usage-tracker.dylib` | `plugins/darwin/arm64/` |
 
+插件当前明确支持 CLIProxyAPI RPC schema 1-3。宿主声明更高 schema 时，插件会协商到已验证的 schema 3，因此仅增加 `schema_version` 不会阻止加载；如果未来 CLIProxyAPI 修改原生 C ABI 或移除旧 schema 的协商支持，则仍需发布对应的兼容版本。
+
 ### Linux amd64
 
 在 Linux amd64 原生构建：

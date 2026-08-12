@@ -75,6 +75,88 @@ func TestStorePersistsAcrossRestartAndReset(t *testing.T) {
 	}
 }
 
+func TestExactCustomStatsUseRequestBoundariesAndSourceFilter(t *testing.T) {
+	config := testConfig(t)
+	config.SyncOnRecord = true
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	start := time.Date(2026, 8, 8, 10, 30, 25, 0, time.UTC)
+	end := time.Date(2026, 8, 8, 13, 45, 10, 0, time.UTC)
+	for _, usage := range []normalizedUsage{
+		{Dimensions: Dimensions{Model: "before", Source: "codex"}, RequestedAt: start.Add(-time.Nanosecond), Counters: Counters{Requests: 1, TotalTokens: 1}},
+		{Dimensions: Dimensions{Model: "start", Source: "codex"}, RequestedAt: start, Counters: Counters{Requests: 1, TotalTokens: 2}},
+		{Dimensions: Dimensions{Model: "inside", Source: "grok"}, RequestedAt: end.Add(-time.Nanosecond), Counters: Counters{Requests: 1, TotalTokens: 4}},
+		{Dimensions: Dimensions{Model: "end", Source: "codex"}, RequestedAt: end, Counters: Counters{Requests: 1, TotalTokens: 8}},
+	} {
+		if err := store.Record(usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	queryRange := usageRange{Name: "custom", Start: start, End: end}
+	stats, err := store.queryStatsBySource(queryRange, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stats.Summary.Requests != 2 || stats.Summary.TotalTokens != 6 || len(stats.Series) != 2 {
+		t.Fatalf("exact custom stats = %+v", stats)
+	}
+	filtered, err := store.queryStatsBySource(queryRange, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filtered.Summary.Requests != 1 || filtered.Summary.TotalTokens != 2 || len(filtered.Sources) != 2 || filtered.Sources[0] != "codex" || filtered.Sources[1] != "grok" {
+		t.Fatalf("source-filtered exact stats = %+v", filtered)
+	}
+}
+
+func TestAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
+	config := testConfig(t)
+	config.SyncOnRecord = true
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := nowUTC().Add(-time.Minute)
+	for _, usage := range []normalizedUsage{
+		{Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}, RequestedAt: now, Counters: Counters{Requests: 1, InputTokens: 2, TotalTokens: 2}},
+		{Dimensions: Dimensions{Model: "beta", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}, RequestedAt: now.Add(time.Second), Counters: Counters{Requests: 1, InputTokens: 4, TotalTokens: 4}},
+	} {
+		if err := store.Record(usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	queryRange := usageRange{Name: "24h", Start: now.Add(-time.Hour)}
+	filter := newUsageFilter("cli", "Codex", "user@example.com")
+	stats, err := store.queryStatsByFilter(queryRange, filter)
+	if err != nil || stats.Summary.Requests != 1 || stats.Summary.TotalTokens != 2 || len(stats.AuthIdentities) != 2 {
+		t.Fatalf("filtered stats = %+v, %v", stats, err)
+	}
+	page, err := store.queryRequestPageByFilter(queryRange, 0, 100, "", filter, "")
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].AuthProvider != "Codex" {
+		t.Fatalf("filtered request page = %+v, %v", page, err)
+	}
+	costs, err := store.queryCostsByFilter(queryRange, filter)
+	if err != nil || costs.Summary.Requests != 1 {
+		t.Fatalf("filtered costs = %+v, %v", costs, err)
+	}
+}
+
+func TestMinuteAlignedCustomStatsUseAggregatePath(t *testing.T) {
+	start := time.Date(2026, 8, 8, 10, 30, 0, 0, time.UTC)
+	end := start.Add(time.Hour)
+	if requiresExactStats(usageRange{Name: "custom", Start: start, End: end}) {
+		t.Fatal("minute-aligned custom range unexpectedly requires exact stats")
+	}
+	if !requiresExactStats(usageRange{Name: "custom", Start: start.Add(time.Second), End: end}) {
+		t.Fatal("second-level custom range did not require exact stats")
+	}
+}
 func TestDashboardPreferencesPersistAcrossRestartAndStatsReset(t *testing.T) {
 	config := testConfig(t)
 	store, err := openStore(config)
@@ -152,6 +234,46 @@ func TestDashboardPreferencesValidation(t *testing.T) {
 		mutate(&value)
 		if _, err := store.SaveDashboardPreferences(value); err == nil || errorHTTPStatus(err) != 400 {
 			t.Fatalf("invalid preferences accepted: %+v, %v", value, err)
+		}
+	}
+}
+
+func TestDashboardPreferencesAcceptRFC3339TimeRangesAndKeepLegacyDates(t *testing.T) {
+	base := defaultDashboardPreferences()
+	legacy := cloneDashboardPreferences(base)
+	legacy.TimeRangeStart = "2026-08-08"
+	legacy.TimeRangeEnd = "2026-08-08"
+	if _, err := normalizeDashboardPreferences(legacy); err != nil {
+		t.Fatalf("legacy date range rejected: %v", err)
+	}
+	exact := cloneDashboardPreferences(base)
+	exact.TimeRangeStart = "2026-08-08T10:30:00+08:00"
+	exact.TimeRangeEnd = "2026-08-08T13:45:00+08:00"
+	if _, err := normalizeDashboardPreferences(exact); err != nil {
+		t.Fatalf("RFC3339 range rejected: %v", err)
+	}
+	for _, value := range []DashboardPreferences{
+		func() DashboardPreferences {
+			item := cloneDashboardPreferences(base)
+			item.TimeRangeStart = exact.TimeRangeStart
+			item.TimeRangeEnd = "2026-08-08"
+			return item
+		}(),
+		func() DashboardPreferences {
+			item := cloneDashboardPreferences(base)
+			item.TimeRangeStart = exact.TimeRangeEnd
+			item.TimeRangeEnd = exact.TimeRangeStart
+			return item
+		}(),
+		func() DashboardPreferences {
+			item := cloneDashboardPreferences(base)
+			item.TimeRangeStart = "not-a-time"
+			item.TimeRangeEnd = exact.TimeRangeEnd
+			return item
+		}(),
+	} {
+		if _, err := normalizeDashboardPreferences(value); err == nil {
+			t.Fatalf("invalid timestamp preferences accepted: %+v", value)
 		}
 	}
 }

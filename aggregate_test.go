@@ -121,6 +121,23 @@ func TestBuildStatsForRangeFiltersSourceAndRetainsSourceOptions(t *testing.T) {
 	}
 }
 
+func TestBuildStatsForRangeSeparatesAndFiltersAuthenticationIdentities(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	hour := now.Truncate(time.Hour).Unix()
+	data := map[aggregateKey]Counters{
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}}:       {Requests: 2, TotalTokens: 20},
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}}: {Requests: 1, TotalTokens: 10},
+	}
+
+	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, newUsageFilter("cli", "Codex", "user@example.com"), now)
+	if stats.Summary.Requests != 2 || stats.Summary.TotalTokens != 20 || len(stats.Groups) != 1 || stats.Groups[0].AuthProvider != "Codex" {
+		t.Fatalf("identity-filtered stats = %+v", stats)
+	}
+	if len(stats.AuthIdentities) != 2 || stats.AuthIdentities[0].Label != "Antigravity-user@example.com" || stats.AuthIdentities[1].Label != "Codex-user@example.com" {
+		t.Fatalf("identity options = %+v", stats.AuthIdentities)
+	}
+}
+
 func TestBuildStatsStableDimensionOrdering(t *testing.T) {
 	now := time.Date(2026, 7, 14, 12, 30, 0, 0, time.UTC)
 	hour := now.Truncate(time.Hour).Unix()
