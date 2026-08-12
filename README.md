@@ -1,6 +1,7 @@
 # CAP Token Usage Tracker
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![访问计数](https://count.getloli.com/get/@cap-token-usage-tracker?theme=gelbooru)](https://github.com/journey-ad/Moe-Counter)
 
 **[English](#english)** | [中文](#中文)
 
