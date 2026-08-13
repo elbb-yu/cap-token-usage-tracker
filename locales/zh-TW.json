@@ -311,6 +311,7 @@
   "backup.restored": "備份還原成功",
   "backup.fileTooLarge": "備份檔案過大（最大 64 MB）",
   "button.fullMode": "完整模式",
+  "button.exitFullMode": "退出完整模式",
   "button.unlockFullMode": "解鎖",
   "fullMode.title": "完整模式",
   "fullMode.description": "輸入 CLIProxyAPI 管理密鑰以在目前頁面工作階段中解鎖完整模式。",

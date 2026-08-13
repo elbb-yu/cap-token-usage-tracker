@@ -618,6 +618,9 @@ func TestFullModeUsesDashboardDialog(t *testing.T) {
 	if !strings.Contains(dashboardHTML, `managementBase+'/stats?range=24h'`) || !strings.Contains(dashboardHTML, `Authorization':'Bearer '+key`) {
 		t.Fatal("full-mode dialog must verify its management key through the stats route")
 	}
+	if !strings.Contains(dashboardHTML, `button.exitFullMode`) || !strings.Contains(dashboardHTML, `function exitFullMode(){fullModeManagementKey='';fullModeEnabled=false;updateFullModeButton();}`) {
+		t.Fatal("full-mode button must become an exit control and clear its in-memory key")
+	}
 	if strings.Contains(dashboardHTML, `full-dashboard`) || strings.Contains(dashboardHTML, `full-mode/session`) {
 		t.Fatal("dashboard must not expose a separate full-mode page or route")
 	}

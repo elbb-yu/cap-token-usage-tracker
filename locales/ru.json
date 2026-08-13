@@ -311,6 +311,7 @@
   "backup.restored": "Резервная копия восстановлена",
   "backup.fileTooLarge": "Файл резервной копии слишком большой (максимум 64 МБ)",
   "button.fullMode": "Полный режим",
+  "button.exitFullMode": "Выйти из полного режима",
   "button.unlockFullMode": "Разблокировать",
   "fullMode.title": "Полный режим",
   "fullMode.description": "Введите ключ управления CLIProxyAPI, чтобы разблокировать полный режим для этого сеанса страницы.",
