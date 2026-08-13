@@ -175,7 +175,6 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`function toggleModel(name)`,
 		`addEventListener('wheel'`,
 		`id="pricingDialog"`,
-		`id="pricingKeyInput"`,
 		`id="cliModelsKeyInput"`,
 		`id="loadCLIModels"`,
 		`id="manualModelInput"`,
@@ -437,7 +436,7 @@ func TestDashboardUsesExactBackendCostsAndPricingSync(t *testing.T) {
 		`dialog#pricingDialog.is-closing{transition-duration:120ms}`,
 		`dialog#pricingDialog::backdrop{background:rgb(0 0 0/0)`,
 		`await reloadPricesAndCosts();closePricingDialog(true);`,
-		`pricingDialog.addEventListener('close',function(){pricingKeyInput.value='';clearCLIModelState();clearPricingDraft();})`,
+		`pricingDialog.addEventListener('close',function(){clearCLIModelState();clearPricingDraft();})`,
 		`价格覆盖`,
 		`未定价`,
 		`同步中`,
@@ -618,8 +617,17 @@ func TestFullModeUsesDashboardDialog(t *testing.T) {
 	if !strings.Contains(dashboardHTML, `managementBase+'/stats?range=24h'`) || !strings.Contains(dashboardHTML, `Authorization':'Bearer '+key`) {
 		t.Fatal("full-mode dialog must verify its management key through the stats route")
 	}
-	if !strings.Contains(dashboardHTML, `button.exitFullMode`) || !strings.Contains(dashboardHTML, `function exitFullMode(){fullModeManagementKey='';fullModeEnabled=false;updateFullModeButton();}`) {
+	if !strings.Contains(dashboardHTML, `button.exitFullMode`) || !strings.Contains(dashboardHTML, `function exitFullMode(){if(pricingDialog&&pricingDialog.open)closePricingDialog(false);fullModeManagementKey='';fullModeEnabled=false;updateFullModeButton();}`) {
 		t.Fatal("full-mode button must become an exit control and clear its in-memory key")
+	}
+	if !strings.Contains(dashboardHTML, `id="pricingButton" class="control"`) || !strings.Contains(dashboardHTML, `data-i18n-title="button.pricing.title" hidden`) {
+		t.Fatal("model prices button must be hidden until full mode is enabled")
+	}
+	if !strings.Contains(dashboardHTML, `pricingButton.hidden=!fullModeEnabled`) || !strings.Contains(dashboardHTML, `var managementKey=fullModeManagementKey`) {
+		t.Fatal("model prices must use the full-mode in-memory management key")
+	}
+	if strings.Contains(dashboardHTML, `id="pricingKeyInput"`) || strings.Contains(dashboardHTML, `pricingKeyInput.value.trim()`) {
+		t.Fatal("model prices dialog must not request the management key again")
 	}
 	if strings.Contains(dashboardHTML, `full-dashboard`) || strings.Contains(dashboardHTML, `full-mode/session`) {
 		t.Fatal("dashboard must not expose a separate full-mode page or route")
