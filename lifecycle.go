@@ -47,6 +47,7 @@ type pluginRuntime struct {
 	priceSyncing     bool
 	fullModeMu       sync.Mutex
 	fullModeSessions map[[32]byte]fullModeSession
+	fullModeUploads  map[string]fullModeUpload
 }
 
 var runtimeState = &pluginRuntime{}
@@ -116,6 +117,7 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 	r.mu.Unlock()
 	r.fullModeMu.Lock()
 	r.fullModeSessions = nil
+	r.fullModeUploads = nil
 	r.fullModeMu.Unlock()
 	if old != nil {
 		if err := old.Close(); err != nil {
@@ -156,6 +158,7 @@ func (r *pluginRuntime) shutdown() error {
 	r.mu.Unlock()
 	r.fullModeMu.Lock()
 	r.fullModeSessions = nil
+	r.fullModeUploads = nil
 	r.fullModeMu.Unlock()
 	if store == nil {
 		return nil

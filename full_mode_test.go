@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -35,7 +36,7 @@ func TestFullModeSessionProtectsFullModeResources(t *testing.T) {
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("missing full-mode session response: %+v, %v", response, err)
 	}
-	pricesRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPut, Path: runtime.routes.fullModePricesPath, Headers: http.Header{"Content-Type": []string{"application/json"}}, Body: []byte(`{"prices":{}}`)})
+	pricesRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModePricesPath})
 	response, err = runtime.handleManagement(pricesRequest)
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("missing full-mode session for prices response: %+v, %v", response, err)
@@ -62,7 +63,7 @@ func TestFullModeSessionProtectsFullModeResources(t *testing.T) {
 	if err != nil || response.StatusCode != http.StatusOK || !containsSensitiveFullModePayload(response.Body) {
 		t.Fatalf("valid full-mode session response: %+v, %v", response, err)
 	}
-	revokeRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeSessionRevokePath, Headers: http.Header{"X-Full-Mode-Session": []string{payload.Session}}})
+	revokeRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeSessionRevokePath, Headers: http.Header{"X-Full-Mode-Session": []string{payload.Session}}})
 	response, err = runtime.handleManagement(revokeRequest)
 	if err != nil || response.StatusCode != http.StatusOK {
 		t.Fatalf("full-mode session revoke response: %+v, %v", response, err)
@@ -96,6 +97,59 @@ func TestFullModeSessionProtectsFullModeResources(t *testing.T) {
 	response, err = runtime.handleManagement(validRequest)
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expired full-mode session response: %+v, %v", response, err)
+	}
+}
+
+func TestFullModeStagedPriceSaveUsesGETResourceRequests(t *testing.T) {
+	config := testConfig(t)
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config}
+	defer runtime.shutdown()
+
+	raw, _ := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
+	if _, err := runtime.registerManagement(raw); err != nil {
+		t.Fatal(err)
+	}
+	sessionRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeSessionPath})
+	response, err := runtime.handleManagement(sessionRequest)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("full-mode session response: %+v, %v", response, err)
+	}
+	var session struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(response.Body, &session); err != nil {
+		t.Fatal(err)
+	}
+	payload := base64.RawURLEncoding.EncodeToString([]byte(`{"prices":{"full-mode-test":{"input":1.5,"output":6}}}`))
+	baseHeaders := http.Header{"X-Full-Mode-Session": []string{session.Session}}
+
+	beginRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModePricesSavePath, Headers: baseHeaders, Query: map[string][]string{"stage": {"begin"}, "chunks": {"1"}}})
+	response, err = runtime.handleManagement(beginRequest)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("full-mode upload begin response: %+v, %v", response, err)
+	}
+	var upload struct {
+		Upload string `json:"upload"`
+	}
+	if err := json.Unmarshal(response.Body, &upload); err != nil || upload.Upload == "" {
+		t.Fatalf("full-mode upload begin payload: %s, %v", response.Body, err)
+	}
+
+	chunkHeaders := baseHeaders.Clone()
+	chunkHeaders.Set("X-Full-Mode-Payload", payload)
+	chunkRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModePricesSavePath, Headers: chunkHeaders, Query: map[string][]string{"stage": {"chunk"}, "upload": {upload.Upload}, "index": {"0"}}})
+	response, err = runtime.handleManagement(chunkRequest)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("full-mode upload chunk response: %+v, %v", response, err)
+	}
+	commitRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModePricesSavePath, Headers: baseHeaders, Query: map[string][]string{"stage": {"commit"}, "upload": {upload.Upload}}})
+	response, err = runtime.handleManagement(commitRequest)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"full-mode-test"`) {
+		t.Fatalf("full-mode upload commit response: %+v, %v", response, err)
 	}
 }
 

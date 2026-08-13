@@ -34,6 +34,7 @@ type registeredRoutes struct {
 	fullModeSessionRevokePath string
 	fullModeDataPath          string
 	fullModePricesPath        string
+	fullModePricesSavePath    string
 	fullModePriceSyncPath     string
 	resourceStatsPath         string
 	resourceRequestsPath      string
@@ -67,6 +68,7 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		fullModeSessionRevokePath: "/v0/resource/plugins/" + pluginID + "/full-mode/session/revoke",
 		fullModeDataPath:          "/v0/resource/plugins/" + pluginID + "/full-mode/data",
 		fullModePricesPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/prices",
+		fullModePricesSavePath:    "/v0/resource/plugins/" + pluginID + "/full-mode/prices/save",
 		fullModePriceSyncPath:     "/v0/resource/plugins/" + pluginID + "/full-mode/prices/sync",
 		resourceStatsPath:         "/v0/resource/plugins/" + pluginID + "/stats",
 		resourceRequestsPath:      "/v0/resource/plugins/" + pluginID + "/requests",
@@ -129,6 +131,7 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 			{Path: "/full-mode/data", Description: "Capability-protected full-mode data."},
 			{Path: "/full-mode/session/revoke", Description: "Revoke a full-mode capability."},
 			{Path: "/full-mode/prices", Description: "Capability-protected model prices."},
+			{Path: "/full-mode/prices/save", Description: "Capability-protected model price save."},
 			{Path: "/full-mode/prices/sync", Description: "Capability-protected model price synchronization."},
 			{
 				Path:        "/stats",
@@ -193,30 +196,28 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 		}
 		return r.fullModeDataResponse(request)
 	case routes.fullModeSessionRevokePath:
-		if !strings.EqualFold(request.Method, http.MethodPost) {
-			return methodNotAllowed(http.MethodPost), nil
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.revokeFullModeSessionResponse(request)
 	case routes.fullModePricesPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
 		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
 			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
 		}
-		switch {
-		case strings.EqualFold(request.Method, http.MethodGet):
-			return r.pricesResponse()
-		case strings.EqualFold(request.Method, http.MethodPut):
-			return r.savePricesResponse(request)
-		default:
-			return methodNotAllowed(http.MethodGet + ", " + http.MethodPut), nil
+		return r.pricesResponse()
+	case routes.fullModePricesSavePath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
 		}
+		return r.fullModeStagedPayloadResponse(request, r.savePricesResponse)
 	case routes.fullModePriceSyncPath:
-		if !strings.EqualFold(request.Method, http.MethodPost) {
-			return methodNotAllowed(http.MethodPost), nil
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
 		}
-		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
-			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
-		}
-		return r.syncPricesResponse(request)
+		return r.fullModeStagedPayloadResponse(request, r.syncPricesResponse)
 	case routes.statsPath, routes.resourceStatsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
