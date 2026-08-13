@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -150,6 +151,85 @@ func TestFullModeStagedPriceSaveUsesGETResourceRequests(t *testing.T) {
 	response, err = runtime.handleManagement(commitRequest)
 	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"full-mode-test"`) {
 		t.Fatalf("full-mode upload commit response: %+v, %v", response, err)
+	}
+}
+
+func TestFullModeBackupAndRestoreRequireSession(t *testing.T) {
+	config := testConfig(t)
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config}
+	defer runtime.shutdown()
+
+	raw, _ := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
+	if _, err := runtime.registerManagement(raw); err != nil {
+		t.Fatal(err)
+	}
+	backupRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeBackupPath})
+	response, err := runtime.handleManagement(backupRequest)
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized full-mode backup response: %+v, %v", response, err)
+	}
+	restoreRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeRestorePath, Query: map[string][]string{"stage": {"begin"}, "chunks": {"1"}}})
+	response, err = runtime.handleManagement(restoreRequest)
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized full-mode restore response: %+v, %v", response, err)
+	}
+
+	sessionRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeSessionPath})
+	response, err = runtime.handleManagement(sessionRequest)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("full-mode session response: %+v, %v", response, err)
+	}
+	var session struct {
+		Session string `json:"session"`
+	}
+	if err := json.Unmarshal(response.Body, &session); err != nil || session.Session == "" {
+		t.Fatalf("full-mode session payload: %s, %v", response.Body, err)
+	}
+
+	headers := http.Header{"X-Full-Mode-Session": []string{session.Session}}
+	backupRequest, _ = json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeBackupPath, Headers: headers})
+	response, err = runtime.handleManagement(backupRequest)
+	if err != nil || response.StatusCode != http.StatusOK || response.Headers.Get("Content-Type") != "application/octet-stream" || len(response.Body) == 0 {
+		t.Fatalf("authorized full-mode backup response: %+v, %v", response, err)
+	}
+
+	encoded := base64.RawURLEncoding.EncodeToString(response.Body)
+	chunkCount := (len(encoded) + fullModeUploadChunkSize - 1) / fullModeUploadChunkSize
+	restoreRequest, _ = json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeRestorePath, Headers: headers, Query: map[string][]string{"stage": {"begin"}, "chunks": {strconv.Itoa(chunkCount)}}})
+	response, err = runtime.handleManagement(restoreRequest)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("full-mode restore begin response: %+v, %v", response, err)
+	}
+	var upload struct {
+		Upload string `json:"upload"`
+	}
+	if err := json.Unmarshal(response.Body, &upload); err != nil || upload.Upload == "" {
+		t.Fatalf("full-mode restore begin payload: %s, %v", response.Body, err)
+	}
+	for index := 0; index < chunkCount; index++ {
+		chunkHeaders := headers.Clone()
+		start := index * fullModeUploadChunkSize
+		end := start + fullModeUploadChunkSize
+		if end > len(encoded) {
+			end = len(encoded)
+		}
+		chunkHeaders.Set("X-Full-Mode-Payload", encoded[start:end])
+		chunkRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeRestorePath, Headers: chunkHeaders, Query: map[string][]string{"stage": {"chunk"}, "upload": {upload.Upload}, "index": {strconv.Itoa(index)}}})
+		response, err = runtime.handleManagement(chunkRequest)
+		if err != nil || response.StatusCode != http.StatusOK {
+			t.Fatalf("full-mode restore chunk %d response: %+v, %v", index, response, err)
+		}
+	}
+	commitHeaders := headers.Clone()
+	commitHeaders.Set("X-Confirm-Restore", "replace")
+	commitRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeRestorePath, Headers: commitHeaders, Query: map[string][]string{"stage": {"commit"}, "upload": {upload.Upload}}})
+	response, err = runtime.handleManagement(commitRequest)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"restored":true`) {
+		t.Fatalf("full-mode restore commit response: %+v, %v", response, err)
 	}
 }
 

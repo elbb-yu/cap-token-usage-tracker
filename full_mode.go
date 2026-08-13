@@ -16,9 +16,9 @@ import (
 const fullModeSessionTTL = 15 * time.Minute
 
 const (
-	fullModeUploadTTL       = time.Minute
+	fullModeUploadTTL       = fullModeSessionTTL
 	fullModeUploadChunkSize = 6000
-	fullModeUploadMaxChunks = 512
+	fullModeUploadMaxChunks = 16000
 )
 
 type fullModeSession struct {
@@ -115,7 +115,7 @@ func (r *pluginRuntime) purgeExpiredFullModeUploads(now time.Time) {
 	}
 }
 
-func (r *pluginRuntime) fullModeStagedPayloadResponse(request pluginapi.ManagementRequest, handler func(pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error)) (pluginapi.ManagementResponse, error) {
+func (r *pluginRuntime) fullModeStagedPayloadResponse(request pluginapi.ManagementRequest, maxPayloadBytes int, contentType string, handler func(pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error)) (pluginapi.ManagementResponse, error) {
 	session := fullModeSessionFromRequest(request)
 	if !r.validFullModeSession(session) {
 		return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
@@ -192,16 +192,20 @@ func (r *pluginRuntime) fullModeStagedPayloadResponse(request pluginapi.Manageme
 			encoded.WriteString(chunk)
 		}
 		body, err := base64.RawURLEncoding.DecodeString(encoded.String())
-		if err != nil || len(body) > 2<<20 {
+		if err != nil || len(body) > maxPayloadBytes {
 			return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid full-mode upload payload"}), nil
 		}
 		request.Body = body
 		request.Headers = request.Headers.Clone()
-		request.Headers.Set("Content-Type", "application/json")
+		request.Headers.Set("Content-Type", contentType)
 		return handler(request)
 	default:
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid full-mode upload stage"}), nil
 	}
+}
+
+func (r *pluginRuntime) fullModeRestoreResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	return r.fullModeStagedPayloadResponse(request, maxDatabaseBackupBytes, "application/octet-stream", r.restoreResponse)
 }
 
 func (r *pluginRuntime) fullModeSessionResponse() (pluginapi.ManagementResponse, error) {

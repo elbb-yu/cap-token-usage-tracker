@@ -15,6 +15,43 @@ var localeFS embed.FS
 var dashboardHTML string
 var fullDashboardHTML string
 
+const (
+	pricingDialogStart  = `<dialog id="pricingDialog">`
+	pricingDialogEnd    = "</dialog>"
+	exportControlsStart = `<div class="export-wrap"><button id="exportButton"`
+	exportControlsEnd   = `<button id="refreshButton"`
+	backupDialogStart   = `<dialog id="backupDialog">`
+	backupDialogEnd     = "</dialog>"
+	exportScriptStart   = "function csvCell(value)"
+	exportScriptEnd     = "function askManagementKey()"
+)
+
+func withoutTemplateSection(template, start, end string) string {
+	startIndex := strings.Index(template, start)
+	if startIndex < 0 {
+		panic("dashboard template section missing")
+	}
+	endOffset := strings.Index(template[startIndex+len(start):], end)
+	if endOffset < 0 {
+		panic("dashboard template section end missing")
+	}
+	endIndex := startIndex + len(start) + endOffset
+	return template[:startIndex] + template[endIndex+len(end):]
+}
+
+func withoutTemplateRange(template, start, end string) string {
+	startIndex := strings.Index(template, start)
+	if startIndex < 0 {
+		panic("dashboard template range missing")
+	}
+	endOffset := strings.Index(template[startIndex+len(start):], end)
+	if endOffset < 0 {
+		panic("dashboard template range end missing")
+	}
+	endIndex := startIndex + len(start) + endOffset
+	return template[:startIndex] + template[endIndex:]
+}
+
 func init() {
 	localeData := make(map[string]map[string]string)
 	for _, code := range []string{"en", "zh-CN", "zh-TW", "ru"} {
@@ -35,7 +72,15 @@ func init() {
 	dashboardHTML = strings.NewReplacer(
 		"/*LOCALE_PLACEHOLDER*/", string(jsonBytes),
 		"/*FULL_MODE_PAGE*/", "false",
-	).Replace(dashboardHTMLTemplate)
+		`<button id="pricingButton" class="control" type="button" title="Configure model prices" data-i18n-title="button.pricing.title" hidden><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 6v12M15 8.5h-4.5a2.2 2.2 0 0 0 0 4.4h3a2.2 2.2 0 0 1 0 4.4H9"></path></svg><span class="button-label" data-i18n="button.pricing">Model prices</span></button>`, "",
+		"document.getElementById('pricingButton').addEventListener('click',openPricing);", "if(pricingDialog){document.getElementById('pricingButton').addEventListener('click',openPricing);",
+		"document.getElementById('syncPrices').addEventListener('click',function(){syncPricing().catch(function(error){text('priceError',error.message);});});", "document.getElementById('syncPrices').addEventListener('click',function(){syncPricing().catch(function(error){text('priceError',error.message);});});}",
+		"document.getElementById('exportButton').addEventListener('click',function(event){event.stopPropagation();toggleExportMenu();});", "",
+		"document.getElementById('exportCSV').addEventListener('click',function(){exportCSV().catch(function(error){text('error',error.message);});});", "",
+		"document.getElementById('exportPNG').addEventListener('click',exportPNG);", "",
+		"initializeDropdownSurface(document.getElementById('exportMenu'));", "",
+		"if(!event.target.closest('.export-wrap'))closeExportMenu();", "",
+	).Replace(withoutTemplateRange(withoutTemplateRange(withoutTemplateSection(withoutTemplateSection(dashboardHTMLTemplate, pricingDialogStart, pricingDialogEnd), backupDialogStart, backupDialogEnd), exportControlsStart, exportControlsEnd), exportScriptStart, exportScriptEnd))
 	fullDashboardHTML = strings.NewReplacer(
 		"/*LOCALE_PLACEHOLDER*/", string(jsonBytes),
 		"/*FULL_MODE_PAGE*/", "true",
@@ -45,11 +90,21 @@ func init() {
 		"document.getElementById('fullModeButton').addEventListener('click',handleFullModeButton);", "document.getElementById('fullModeButton').addEventListener('click',handleFullModeButton);if(fullModePage){var fullModeHash=window.location.hash.replace(/^#/,''),fullModeParams=new URLSearchParams(fullModeHash);fullModeSession=fullModeParams.get('session')||'';history.replaceState(null,'',window.location.pathname+window.location.search);if(!fullModeSession){text('error',t('fullMode.keyRequired'));return;}api(resourceBase+'/full-mode/data').catch(function(error){fullModeSession='';text('error',error.message);}).then(function(){if(fullModeSession)startDashboard();});}",
 		"function exitFullMode(){if(!fullModePage)return;if(pricingDialog&&pricingDialog.open)closePricingDialog(false);fullModeSession='';window.location.assign(resourceBase+'/dashboard');}", "function exitFullMode(){if(!fullModePage)return;if(pricingDialog&&pricingDialog.open)closePricingDialog(false);var session=fullModeSession;fullModeSession='';if(session)fetch(resourceBase+'/full-mode/session/revoke',{method:'GET',headers:{'X-Full-Mode-Session':session},credentials:'same-origin',cache:'no-store',keepalive:true}).catch(function(){});window.location.assign(resourceBase+'/dashboard');}",
 		"var pricesURL=resourceBase+'/prices'", "var pricesURL=resourceBase+'/full-mode/prices'",
+		"var backupURL=managementBase+'/backup';var restoreURL=managementBase+'/restore';", "var backupURL=resourceBase+'/full-mode/backup';var restoreURL=resourceBase+'/full-mode/restore';",
 		"var savePricesURL=managementBase+'/prices'", "var savePricesURL=resourceBase+'/full-mode/prices/save'",
 		"var syncPricesURL=managementBase+'/prices/sync'", "var syncPricesURL=resourceBase+'/full-mode/prices/sync'",
 		"async function savePricing(){var managementKey=fullModeManagementKey;if(!fullModeEnabled||!managementKey){", "async function savePricing(){if(!fullModeEnabled||!fullModeSession){",
 		"async function syncPricing(){var managementKey=fullModeManagementKey;if(!fullModeEnabled||!managementKey){", "async function syncPricing(){if(!fullModeEnabled||!fullModeSession){",
 		"function openPricing(){if(!fullModeEnabled||!fullModeManagementKey)return;", "function openPricing(){if(!fullModeEnabled||!fullModeSession)return;",
+		"async function exportCSV(){if(!currentData)return;", "async function exportCSV(){await requireFullModeExportSession();if(!currentData)return;",
+		"function exportPNG(){if(!currentData)return;", "async function exportPNG(){await requireFullModeExportSession();if(!currentData)return;",
+		"document.getElementById('exportPNG').addEventListener('click',exportPNG);", "document.getElementById('exportPNG').addEventListener('click',function(){exportPNG().catch(function(error){text('error',error.message);});});",
+		"async function downloadBackup(){closeExportMenu();var managementKey=await askBackupManagementKey();if(!managementKey)return;", "async function downloadBackup(){closeExportMenu();await requireFullModeExportSession();",
+		"fetch(backupURL,{method:'GET',headers:{'Authorization':'Bearer '+managementKey},credentials:'same-origin',signal:controller.signal})", "fetch(backupURL,{method:'GET',headers:{'X-Full-Mode-Session':fullModeSession},credentials:'same-origin',signal:controller.signal})",
+		"  var managementKey=await askBackupManagementKey();\n  if(!managementKey)return;", "  await requireFullModeExportSession();",
+		"var response=await fetch(restoreURL,{method:'POST',headers:{'Authorization':'Bearer '+managementKey,'Content-Type':'application/octet-stream','X-Confirm-Restore':'replace'},credentials:'same-origin',body:file,signal:controller.signal});\n    clearTimeout(timer);\n    if(!response.ok){var payload=await response.json().catch(function(){return {};});throw new Error(payload.error||t('error.api',{status:response.status}));}", "await fullModeBinaryPayloadRequest(restoreURL,file,120000);\n    clearTimeout(timer);",
+		"function askBackupManagementKey(){backupKeyInput.value='';backupDialog.returnValue='';backupDialog.showModal();backupKeyInput.focus();return new Promise(function(resolve){backupDialog.addEventListener('close',function(){var key=backupDialog.returnValue==='confirm'?backupKeyInput.value.trim():'';backupKeyInput.value='';resolve(key);},{once:true});});}", "",
+		"function startDashboard(){", "async function requireFullModeExportSession(){if(!fullModePage||!fullModeSession)throw new Error(t('fullMode.keyRequired'));await api(resourceBase+'/full-mode/data');}async function fullModeBinaryPayloadRequest(url,blob,timeout){var bytes=new Uint8Array(await blob.arrayBuffer()),binary='',step=16384;for(var offset=0;offset<bytes.length;offset+=step)binary+=String.fromCharCode.apply(null,bytes.subarray(offset,Math.min(offset+step,bytes.length)));var encoded=btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,''),chunkSize=6000,count=Math.max(1,Math.ceil(encoded.length/chunkSize)),requestTimeout=timeout||120000;return api(url+'?stage=begin&chunks='+count,{method:'GET',cache:'no-store',timeout:requestTimeout}).then(function(state){var upload=String(state.upload||'');if(!upload)throw new Error(t('error.api',{status:500}));var pending=Promise.resolve();for(var index=0;index<count;index++){(function(chunkIndex){pending=pending.then(function(){return api(url+'?stage=chunk&upload='+encodeURIComponent(upload)+'&index='+chunkIndex,{method:'GET',headers:{'X-Full-Mode-Payload':encoded.slice(chunkIndex*chunkSize,(chunkIndex+1)*chunkSize)},cache:'no-store',timeout:requestTimeout});});})(index);}return pending.then(function(){return api(url+'?stage=commit&upload='+encodeURIComponent(upload),{method:'GET',headers:{'X-Confirm-Restore':'replace'},cache:'no-store',timeout:requestTimeout});});});}function startDashboard(){",
 		"await api(savePricesURL,{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+managementKey},body:JSON.stringify({prices:next,sync_settings:settings})});", "await fullModePayloadRequest(savePricesURL,{prices:next,sync_settings:settings});",
 		"await api(syncPricesURL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+managementKey},body:JSON.stringify({source:'models.dev',models:models,sync_settings:settings}),timeout:25000});", "await fullModePayloadRequest(syncPricesURL,{source:'models.dev',models:models,sync_settings:settings},25000);",
 		"var fullModePage=/*FULL_MODE_PAGE*/,fullModeEnabled=fullModePage,fullModeManagementKey='',fullModeSession='',fullModeDialog=document.getElementById('fullModeDialog'),fullModeKeyInput=document.getElementById('fullModeKeyInput');", "function fullModePayloadRequest(url,payload,timeout){var bytes=new TextEncoder().encode(JSON.stringify(payload)),binary='',step=16384;for(var offset=0;offset<bytes.length;offset+=step)binary+=String.fromCharCode.apply(null,bytes.subarray(offset,Math.min(offset+step,bytes.length)));var encoded=btoa(binary).replace(/\\+/g,'-').replace(/\\//g,'_').replace(/=+$/,''),chunkSize=6000,count=Math.max(1,Math.ceil(encoded.length/chunkSize)),requestTimeout=timeout||25000;return api(url+'?stage=begin&chunks='+count,{method:'GET',cache:'no-store',timeout:requestTimeout}).then(function(state){var upload=String(state.upload||'');if(!upload)throw new Error(t('error.api',{status:500}));var pending=Promise.resolve();for(var index=0;index<count;index++){(function(chunkIndex){pending=pending.then(function(){return api(url+'?stage=chunk&upload='+encodeURIComponent(upload)+'&index='+chunkIndex,{method:'GET',headers:{'X-Full-Mode-Payload':encoded.slice(chunkIndex*chunkSize,(chunkIndex+1)*chunkSize)},cache:'no-store',timeout:requestTimeout});});})(index);}return pending.then(function(){return api(url+'?stage=commit&upload='+encodeURIComponent(upload),{method:'GET',cache:'no-store',timeout:requestTimeout});});});}\nvar fullModePage=true,fullModeEnabled=fullModePage,fullModeManagementKey='',fullModeSession='',fullModeDialog=document.getElementById('fullModeDialog'),fullModeKeyInput=document.getElementById('fullModeKeyInput');",

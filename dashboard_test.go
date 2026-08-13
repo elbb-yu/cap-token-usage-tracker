@@ -20,10 +20,6 @@ func TestDashboardUsesBoundedSafeRendering(t *testing.T) {
 		"load(true).catch(function(error)",
 		"resetKeyInput.value=''",
 		"resetDialog.showModal()",
-		"backupDialog.showModal()",
-		"function askBackupManagementKey()",
-		"await askBackupManagementKey()",
-		`data-i18n="backup.keyPrompt"`,
 		"window.parent.document.documentElement",
 		"new MutationObserver",
 		"attributeFilter:['data-theme','style','class','lang']",
@@ -146,7 +142,7 @@ func TestDashboardEnhancesNativeSelectMenus(t *testing.T) {
 }
 
 func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
-	html := dashboardHTML
+	html := fullDashboardHTML
 	for _, required := range []string{
 		`id="granularity"`,
 		`id="totalCost"`,
@@ -174,51 +170,13 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`function selectModel(name,options)`,
 		`function toggleModel(name)`,
 		`addEventListener('wheel'`,
-		`id="pricingDialog"`,
-		`id="cliModelsKeyInput"`,
-		`id="loadCLIModels"`,
-		`id="manualModelInput"`,
-		`id="addManualModel"`,
-		`manualDraftModels=new Set()`,
-		`function addManualModel()`,
-		`function rerenderPricingEditor(excludedName)`,
-		`manualDraftModels.has(name)||input>0`,
-		`if(base.updated_at)value.updated_at=base.updated_at`,
-		`manualDraftModels.clear()`,
-		`var modelsURL=publicPathPrefix+'/v1/models'`,
-		`function normalizeCLIModels(payload)`,
-		`async function fetchCLIModels(renderEditor)`,
-		`cliModelsPromise=api(modelsURL`,
 		`moneyFormatters[key]`,
-		`var pricesURL=resourceBase+'/prices'`,
 		`var costsURL=resourceBase+'/costs'`,
-		`var savePricesURL=managementBase+'/prices'`,
-		`var syncPricesURL=managementBase+'/prices/sync'`,
-		`function applyPrices(values)`,
 		`function aggregateCostSeries()`,
 		`function visibleCostSummary()`,
-		`async function savePricing()`,
-		`async function syncPricing()`,
 		`price-cache-read`,
 		`price-cache-creation`,
-		`context-tier-controls`,
-		`add-context-tier`,
-		`remove-context-tier`,
-		`remove-model-price`,
-		`pending-delete`,
-		`pendingDeletedPrices=new Set()`,
-		`button.textContent=deleted?'撤销删除':'删除价格'`,
-		`setPriceDeletedState(row,!pendingDeletedPrices.has(name))`,
-		`if(pendingDeletedPrices.has(row.dataset.model))return`,
-		`clearCLIModelState()`,
-		`id="providerPriority"`,
-		`id="ignoredSuffixes"`,
-		`id="syncMappings"`,
-		`id="syncPrices"`,
 		`id="costCoverage"`,
-		`id="priceCoverageStatus"`,
-		`id="missingPriceStatus"`,
-		`id="lastSyncStatus"`,
 		`item.estimated_cost`,
 		`record.estimated_cost`,
 		`estimated.input_usd`,
@@ -226,13 +184,11 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`estimated.cache_read_usd`,
 		`estimated.cache_creation_usd`,
 		`estimated.total_usd`,
-		`sync_settings:settings`,
-		`模型目录直接读取 CLIProxyAPI /v1/models`,
 		`async function exportCSV()`,
 		`function exportPNG()`,
 		`id="exportBackup"`,
-		`var backupURL=managementBase+'/backup'`,
-		`var restoreURL=managementBase+'/restore'`,
+		`var backupURL=resourceBase+'/full-mode/backup'`,
+		`var restoreURL=resourceBase+'/full-mode/restore'`,
 		`async function downloadBackup()`,
 		`function restoreBackup()`,
 		`async function confirmAndRestore(file)`,
@@ -391,10 +347,27 @@ func TestDashboardPreservesReverseProxyPathPrefix(t *testing.T) {
 }
 
 func TestDashboardUsesExactBackendCostsAndPricingSync(t *testing.T) {
-	html := dashboardHTML
+	html := fullDashboardHTML
 	for _, required := range []string{
 		`var costsURL=resourceBase+'/costs'`,
-		`var syncPricesURL=managementBase+'/prices/sync'`,
+		`var pricesURL=resourceBase+'/full-mode/prices'`,
+		`var savePricesURL=resourceBase+'/full-mode/prices/save'`,
+		`var syncPricesURL=resourceBase+'/full-mode/prices/sync'`,
+		`id="pricingDialog"`,
+		`id="cliModelsKeyInput"`,
+		`id="loadCLIModels"`,
+		`id="manualModelInput"`,
+		`id="addManualModel"`,
+		`manualDraftModels=new Set()`,
+		`function addManualModel()`,
+		`function rerenderPricingEditor(excludedName)`,
+		`manualDraftModels.has(name)||input>0`,
+		`if(base.updated_at)value.updated_at=base.updated_at`,
+		`manualDraftModels.clear()`,
+		`var modelsURL=publicPathPrefix+'/v1/models'`,
+		`function normalizeCLIModels(payload)`,
+		`async function fetchCLIModels(renderEditor)`,
+		`cliModelsPromise=api(modelsURL`,
 		`api(costsURL+'?'+query)`,
 		`currentCosts.models`,
 		`currentCosts.series`,
@@ -416,8 +389,8 @@ func TestDashboardUsesExactBackendCostsAndPricingSync(t *testing.T) {
 		`mappings`,
 		`last_sync`,
 		`source:'models.dev'`,
-		`body:JSON.stringify({prices:next,sync_settings:settings})`,
-		`body:JSON.stringify({source:'models.dev',models:models,sync_settings:settings})`,
+		`fullModePayloadRequest(savePricesURL,{prices:next,sync_settings:settings})`,
+		`fullModePayloadRequest(syncPricesURL,{source:'models.dev',models:models,sync_settings:settings},25000)`,
 		`displayCurrency==='CNY'`,
 		`value*Number(exchangeRate.rate||0)`,
 		`label.textContent=money(value)`,
@@ -437,6 +410,20 @@ func TestDashboardUsesExactBackendCostsAndPricingSync(t *testing.T) {
 		`dialog#pricingDialog::backdrop{background:rgb(0 0 0/0)`,
 		`await reloadPricesAndCosts();closePricingDialog(true);`,
 		`pricingDialog.addEventListener('close',function(){clearCLIModelState();clearPricingDraft();})`,
+		`context-tier-controls`,
+		`add-context-tier`,
+		`remove-context-tier`,
+		`remove-model-price`,
+		`pending-delete`,
+		`pendingDeletedPrices=new Set()`,
+		`button.textContent=deleted?'撤销删除':'删除价格'`,
+		`setPriceDeletedState(row,!pendingDeletedPrices.has(name))`,
+		`if(pendingDeletedPrices.has(row.dataset.model))return`,
+		`clearCLIModelState()`,
+		`id="providerPriority"`,
+		`id="ignoredSuffixes"`,
+		`id="syncMappings"`,
+		`id="syncPrices"`,
 		`价格覆盖`,
 		`未定价`,
 		`同步中`,
@@ -620,8 +607,14 @@ func TestFullModeUsesSeparateProtectedDashboard(t *testing.T) {
 	if !strings.Contains(dashboardHTML, `resourceBase+'/full-dashboard#session='+encodeURIComponent(session)`) || strings.Contains(dashboardHTML, `fullModeManagementKey=key`) {
 		t.Fatal("homepage must navigate with the opaque session token without retaining the management key")
 	}
-	if !strings.Contains(dashboardHTML, `id="pricingButton" class="control"`) || !strings.Contains(dashboardHTML, `data-i18n-title="button.pricing.title" hidden`) {
-		t.Fatal("model prices button must remain hidden on the normal dashboard")
+	for _, forbidden := range []string{
+		`id="pricingButton"`, `id="pricingDialog"`, `id="priceList"`, `id="savePricing"`, `id="syncPrices"`,
+		`id="exportButton"`, `id="exportMenu"`, `id="exportCSV"`, `id="exportPNG"`, `id="exportBackup"`, `id="restoreBackup"`, `id="backupDialog"`,
+		`function exportCSV()`, `function exportPNG()`, `function downloadBackup()`, `function restoreBackup()`, `function confirmAndRestore(file)`,
+	} {
+		if strings.Contains(dashboardHTML, forbidden) {
+			t.Fatalf("normal dashboard must not expose pricing UI %q", forbidden)
+		}
 	}
 	for _, required := range []string{`var fullModePage=true`, `button.exitFullMode`, `history.replaceState(null,'',window.location.pathname+window.location.search)`} {
 		if !strings.Contains(fullDashboardHTML, required) {
@@ -631,8 +624,22 @@ func TestFullModeUsesSeparateProtectedDashboard(t *testing.T) {
 	if !strings.Contains(fullDashboardHTML, `X-Full-Mode-Session`) || !strings.Contains(fullDashboardHTML, `resourceBase+'/full-mode/prices'`) || !strings.Contains(fullDashboardHTML, `function openPricing(){if(!fullModeEnabled||!fullModeSession)return;`) || strings.Contains(fullDashboardHTML, `fullModeManagementKey=key`) {
 		t.Fatal("full dashboard must use the server-issued capability for protected endpoints")
 	}
+	for _, required := range []string{
+		`id="pricingButton" class="control"`, `id="pricingDialog"`, `id="priceList"`, `id="savePricing"`, `id="syncPrices"`,
+		`id="exportButton"`, `id="exportMenu"`, `id="exportCSV"`, `id="exportPNG"`, `id="exportBackup"`, `id="restoreBackup"`, `id="backupDialog"`,
+		`resourceBase+'/full-mode/backup'`, `resourceBase+'/full-mode/restore'`, `async function requireFullModeExportSession()`, `await fullModeBinaryPayloadRequest(restoreURL,file,120000)`,
+	} {
+		if !strings.Contains(fullDashboardHTML, required) {
+			t.Fatalf("full dashboard must provide pricing UI %q", required)
+		}
+	}
 	if !strings.Contains(fullDashboardHTML, `api(resetURL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+managementKey}`) {
 		t.Fatal("full dashboard must retain management-key confirmation for reset")
+	}
+	for _, forbidden := range []string{`askBackupManagementKey`, `managementBase+'/backup'`, `managementBase+'/restore'`, `Authorization':'Bearer '+managementKey,'Content-Type':'application/octet-stream'`} {
+		if strings.Contains(fullDashboardHTML, forbidden) {
+			t.Fatalf("full dashboard export must not use a management key %q", forbidden)
+		}
 	}
 	if strings.Contains(fullDashboardHTML, `sensitive_data":[]`) {
 		t.Fatal("full dashboard HTML must not embed protected data")
@@ -807,7 +814,7 @@ func TestDashboardLegendLabelRecoversFullModelDetails(t *testing.T) {
 }
 
 func TestDashboardModelShareMetricSwitch(t *testing.T) {
-	html := dashboardHTML
+	html := fullDashboardHTML
 	for _, required := range []string{
 		`id="modelShareMetric" class="metric-switch" role="group" data-i18n-aria="modelShare.metric.aria"`,
 		`data-model-share-metric="requests" aria-pressed="true"`,
@@ -1055,12 +1062,14 @@ func TestDashboardLocalesCatalog(t *testing.T) {
 		"function translateRawResult(raw,failed)",
 		`/^失败`,
 		"translateRawResult(item.result,item.failed)",
-		"translateRawResult(record.result,record.failed)",
 		"case 'result':return translateRawResult(item.result,item.failed);",
 	} {
 		if !strings.Contains(dashboardHTML, required) {
 			t.Fatalf("dashboardHTML missing translateRawResult coverage %q", required)
 		}
+	}
+	if !strings.Contains(fullDashboardHTML, "translateRawResult(record.result,record.failed)") {
+		t.Fatal("full dashboardHTML missing export translateRawResult coverage")
 	}
 
 	// Verify the locale runtime is wired: translateStatic must be called
