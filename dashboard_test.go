@@ -620,6 +620,9 @@ func TestFullModeUsesSeparateProtectedDashboard(t *testing.T) {
 	if !strings.Contains(dashboardHTML, `function initializePricingSelectEnhancement(){var list=document.getElementById('priceList');if(!list)return;`) {
 		t.Fatal("normal dashboard must skip pricing select initialization when full-mode pricing UI is absent")
 	}
+	if !strings.Contains(dashboardHTML, `function openDateRange(){closeActiveDropdown(false);if(typeof closeExportMenu==='function')closeExportMenu();`) {
+		t.Fatal("normal dashboard date range picker must not require the removed export menu script")
+	}
 	for _, required := range []string{`var fullModePage=true`, `button.exitFullMode`, `history.replaceState(null,'',window.location.pathname+window.location.search)`} {
 		if !strings.Contains(fullDashboardHTML, required) {
 			t.Fatalf("full dashboard missing %q", required)

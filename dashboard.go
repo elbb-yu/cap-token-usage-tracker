@@ -72,6 +72,7 @@ func init() {
 	dashboardHTML = strings.NewReplacer(
 		"/*LOCALE_PLACEHOLDER*/", string(jsonBytes),
 		"/*FULL_MODE_PAGE*/", "false",
+		"function openDateRange(){closeActiveDropdown(false);closeExportMenu();", "function openDateRange(){closeActiveDropdown(false);if(typeof closeExportMenu==='function')closeExportMenu();",
 		`<button id="pricingButton" class="control" type="button" title="Configure model prices" data-i18n-title="button.pricing.title" hidden><svg class="button-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M12 6v12M15 8.5h-4.5a2.2 2.2 0 0 0 0 4.4h3a2.2 2.2 0 0 1 0 4.4H9"></path></svg><span class="button-label" data-i18n="button.pricing">Model prices</span></button>`, "",
 		"document.getElementById('pricingButton').addEventListener('click',openPricing);", "if(pricingDialog){document.getElementById('pricingButton').addEventListener('click',openPricing);",
 		"document.getElementById('syncPrices').addEventListener('click',function(){syncPricing().catch(function(error){text('priceError',error.message);});});", "document.getElementById('syncPrices').addEventListener('click',function(){syncPricing().catch(function(error){text('priceError',error.message);});});}",
