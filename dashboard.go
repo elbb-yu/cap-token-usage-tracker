@@ -78,6 +78,8 @@ func init() {
 		"document.getElementById('exportButton').addEventListener('click',function(event){event.stopPropagation();toggleExportMenu();});", "",
 		"document.getElementById('exportCSV').addEventListener('click',function(){exportCSV().catch(function(error){text('error',error.message);});});", "",
 		"document.getElementById('exportPNG').addEventListener('click',exportPNG);", "",
+		"document.getElementById('exportBackup').addEventListener('click',function(){downloadBackup().catch(function(error){text('error',error.message||t('backup.failed'));});});", "",
+		"document.getElementById('restoreBackup').addEventListener('click',restoreBackup);", "",
 		"initializeDropdownSurface(document.getElementById('exportMenu'));", "",
 		"if(!event.target.closest('.export-wrap'))closeExportMenu();", "",
 	).Replace(withoutTemplateRange(withoutTemplateRange(withoutTemplateSection(withoutTemplateSection(dashboardHTMLTemplate, pricingDialogStart, pricingDialogEnd), backupDialogStart, backupDialogEnd), exportControlsStart, exportControlsEnd), exportScriptStart, exportScriptEnd))

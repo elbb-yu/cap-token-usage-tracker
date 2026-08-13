@@ -611,6 +611,7 @@ func TestFullModeUsesSeparateProtectedDashboard(t *testing.T) {
 		`id="pricingButton"`, `id="pricingDialog"`, `id="priceList"`, `id="savePricing"`, `id="syncPrices"`,
 		`id="exportButton"`, `id="exportMenu"`, `id="exportCSV"`, `id="exportPNG"`, `id="exportBackup"`, `id="restoreBackup"`, `id="backupDialog"`,
 		`function exportCSV()`, `function exportPNG()`, `function downloadBackup()`, `function restoreBackup()`, `function confirmAndRestore(file)`,
+		`document.getElementById('exportBackup').addEventListener`, `document.getElementById('restoreBackup').addEventListener`,
 	} {
 		if strings.Contains(dashboardHTML, forbidden) {
 			t.Fatalf("normal dashboard must not expose pricing UI %q", forbidden)
