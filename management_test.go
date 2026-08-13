@@ -34,11 +34,37 @@ func TestManagementRegistrationUsesDynamicPluginID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(registration.Routes) != 6 || registration.Routes[0].Path != "/plugins/custom-id/stats" || registration.Routes[2].Method != http.MethodPut || registration.Routes[2].Path != "/plugins/custom-id/prices" || registration.Routes[3].Path != "/plugins/custom-id/prices/sync" || registration.Routes[4].Method != http.MethodGet || registration.Routes[4].Path != "/plugins/custom-id/backup" || registration.Routes[5].Method != http.MethodPost || registration.Routes[5].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 7 || registration.Resources[0].Path != "/dashboard" || registration.Resources[1].Path != "/stats" || registration.Resources[2].Path != "/requests" || registration.Resources[3].Path != "/costs" || registration.Resources[4].Path != "/exchange-rate" || registration.Resources[5].Path != "/prices" || registration.Resources[6].Path != "/preferences" {
+	if len(registration.Routes) != 7 || registration.Routes[0].Path != "/plugins/custom-id/stats" || registration.Routes[2].Method != http.MethodPut || registration.Routes[2].Path != "/plugins/custom-id/prices" || registration.Routes[3].Path != "/plugins/custom-id/prices/sync" || registration.Routes[4].Method != http.MethodGet || registration.Routes[4].Path != "/plugins/custom-id/backup" || registration.Routes[5].Method != http.MethodPost || registration.Routes[5].Path != "/plugins/custom-id/restore" || registration.Routes[6].Method != http.MethodGet || registration.Routes[6].Path != "/plugins/custom-id/full-mode/session" || len(registration.Resources) != 8 || registration.Resources[0].Path != "/dashboard" || registration.Resources[1].Path != "/full-dashboard" || registration.Resources[2].Path != "/stats" || registration.Resources[3].Path != "/requests" || registration.Resources[4].Path != "/costs" || registration.Resources[5].Path != "/exchange-rate" || registration.Resources[6].Path != "/prices" || registration.Resources[7].Path != "/preferences" {
 		t.Fatalf("unexpected registration: %+v", registration)
 	}
 	if registration.Routes[0].Menu != "" {
 		t.Fatal("authenticated stats route must not declare a legacy menu")
+	}
+}
+
+func TestFullDashboardRoutes(t *testing.T) {
+	runtime := &pluginRuntime{routes: registeredRoutes{
+		pluginID:            "test",
+		fullDashboardPath:   "/v0/resource/plugins/test/full-dashboard",
+		fullModeSessionPath: "/v0/management/plugins/test/full-mode/session",
+	}}
+
+	request, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullDashboardPath})
+	response, err := runtime.handleManagement(request)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `data-full-mode="true"`) {
+		t.Fatalf("full dashboard response: %+v, %v", response, err)
+	}
+
+	request, _ = json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeSessionPath})
+	response, err = runtime.handleManagement(request)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"authorized":true`) {
+		t.Fatalf("full mode session response: %+v, %v", response, err)
+	}
+
+	request, _ = json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeSessionPath})
+	response, err = runtime.handleManagement(request)
+	if err != nil || response.StatusCode != http.StatusMethodNotAllowed || response.Headers.Get("Allow") != http.MethodGet {
+		t.Fatalf("full mode session method response: %+v, %v", response, err)
 	}
 }
 

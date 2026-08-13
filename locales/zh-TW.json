@@ -309,5 +309,12 @@
   "backup.restoreWarning": "這將以所選備份取代目前全部資料（使用歷程、價格、偏好設定）。此操作無法復原。",
   "backup.restoring": "正在還原備份…",
   "backup.restored": "備份還原成功",
-  "backup.fileTooLarge": "備份檔案過大（最大 64 MB）"
+  "backup.fileTooLarge": "備份檔案過大（最大 64 MB）",
+  "button.fullMode": "完整模式",
+  "button.unlockFullMode": "解鎖",
+  "button.backToDashboard": "返回",
+  "fullMode.title": "完整模式",
+  "fullMode.description": "輸入 CLIProxyAPI 管理密鑰以在目前頁面工作階段中開啟完整儀表板。",
+  "fullMode.managementKey": "CLIProxyAPI 管理密鑰",
+  "fullMode.keyRequired": "請輸入 CLIProxyAPI 管理密鑰。"
 }

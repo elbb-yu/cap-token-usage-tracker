@@ -309,5 +309,12 @@
   "backup.restoreWarning": "Это ЗАМЕНИТ все текущие данные (историю использования, цены, настройки) выбранной резервной копией. Отменить это действие нельзя.",
   "backup.restoring": "Восстановление резервной копии…",
   "backup.restored": "Резервная копия восстановлена",
-  "backup.fileTooLarge": "Файл резервной копии слишком большой (максимум 64 МБ)"
+  "backup.fileTooLarge": "Файл резервной копии слишком большой (максимум 64 МБ)",
+  "button.fullMode": "Полный режим",
+  "button.unlockFullMode": "Разблокировать",
+  "button.backToDashboard": "Назад",
+  "fullMode.title": "Полный режим",
+  "fullMode.description": "Введите ключ управления CLIProxyAPI, чтобы открыть полную панель для этого сеанса страницы.",
+  "fullMode.managementKey": "Ключ управления CLIProxyAPI",
+  "fullMode.keyRequired": "Введите ключ управления CLIProxyAPI."
 }

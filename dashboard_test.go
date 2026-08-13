@@ -611,6 +611,21 @@ func TestDashboardResponseHeaders(t *testing.T) {
 	}
 }
 
+func TestFullDashboardStartsLockedWhileDashboardDoesNot(t *testing.T) {
+	if !strings.Contains(dashboardHTML, `data-full-mode="false"`) || !strings.Contains(dashboardHTML, `id="fullModeGate" class="full-mode-gate" hidden`) {
+		t.Fatal("normal dashboard must keep the full-mode gate hidden")
+	}
+	if !strings.Contains(fullDashboardHTML, `data-full-mode="true"`) || strings.Contains(fullDashboardHTML, `id="fullModeGate" class="full-mode-gate" hidden`) {
+		t.Fatal("full dashboard must start with the full-mode gate visible")
+	}
+	if !strings.Contains(fullDashboardHTML, `full-mode/session`) || !strings.Contains(fullDashboardHTML, `Authorization':'Bearer '+key`) {
+		t.Fatal("full dashboard must validate the management key before loading data")
+	}
+	if fullDashboardResponse().Headers.Get("Cache-Control") != "no-store" {
+		t.Fatal("full dashboard response must not be cached")
+	}
+}
+
 func TestDashboardDoesNotServerRenderUsageValues(t *testing.T) {
 	malicious := `</td><script>alert(1)</script>`
 	if strings.Contains(dashboardHTML, malicious) {
