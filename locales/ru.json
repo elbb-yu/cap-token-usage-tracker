@@ -314,7 +314,7 @@
   "button.exitFullMode": "Выйти из полного режима",
   "button.unlockFullMode": "Разблокировать",
   "fullMode.title": "Полный режим",
-  "fullMode.description": "Введите ключ управления CLIProxyAPI, чтобы разблокировать полный режим для этого сеанса страницы.",
+  "fullMode.description": "Введите ключ управления CLIProxyAPI, чтобы открыть отдельную панель полного режима.",
   "fullMode.managementKey": "Ключ управления CLIProxyAPI",
   "fullMode.keyRequired": "Введите ключ управления CLIProxyAPI."
 }

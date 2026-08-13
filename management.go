@@ -23,20 +23,26 @@ type managementRegistrationResponse struct {
 }
 
 type registeredRoutes struct {
-	pluginID                 string
-	statsPath                string
-	resetPath                string
-	backupPath               string
-	restorePath              string
-	dashboardPath            string
-	resourceStatsPath        string
-	resourceRequestsPath     string
-	resourceCostsPath        string
-	resourceExchangeRatePath string
-	pricesPath               string
-	priceSyncPath            string
-	resourcePricesPath       string
-	resourcePreferencesPath  string
+	pluginID                  string
+	statsPath                 string
+	resetPath                 string
+	backupPath                string
+	restorePath               string
+	dashboardPath             string
+	fullDashboardPath         string
+	fullModeSessionPath       string
+	fullModeSessionRevokePath string
+	fullModeDataPath          string
+	fullModePricesPath        string
+	fullModePriceSyncPath     string
+	resourceStatsPath         string
+	resourceRequestsPath      string
+	resourceCostsPath         string
+	resourceExchangeRatePath  string
+	pricesPath                string
+	priceSyncPath             string
+	resourcePricesPath        string
+	resourcePreferencesPath   string
 }
 
 func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationResponse, error) {
@@ -50,20 +56,26 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 	}
 
 	routes := registeredRoutes{
-		pluginID:                 pluginID,
-		statsPath:                "/v0/management/plugins/" + pluginID + "/stats",
-		resetPath:                "/v0/management/plugins/" + pluginID + "/reset",
-		backupPath:               "/v0/management/plugins/" + pluginID + "/backup",
-		restorePath:              "/v0/management/plugins/" + pluginID + "/restore",
-		dashboardPath:            "/v0/resource/plugins/" + pluginID + "/dashboard",
-		resourceStatsPath:        "/v0/resource/plugins/" + pluginID + "/stats",
-		resourceRequestsPath:     "/v0/resource/plugins/" + pluginID + "/requests",
-		resourceCostsPath:        "/v0/resource/plugins/" + pluginID + "/costs",
-		resourceExchangeRatePath: "/v0/resource/plugins/" + pluginID + "/exchange-rate",
-		pricesPath:               "/v0/management/plugins/" + pluginID + "/prices",
-		priceSyncPath:            "/v0/management/plugins/" + pluginID + "/prices/sync",
-		resourcePricesPath:       "/v0/resource/plugins/" + pluginID + "/prices",
-		resourcePreferencesPath:  "/v0/resource/plugins/" + pluginID + "/preferences",
+		pluginID:                  pluginID,
+		statsPath:                 "/v0/management/plugins/" + pluginID + "/stats",
+		resetPath:                 "/v0/management/plugins/" + pluginID + "/reset",
+		backupPath:                "/v0/management/plugins/" + pluginID + "/backup",
+		restorePath:               "/v0/management/plugins/" + pluginID + "/restore",
+		dashboardPath:             "/v0/resource/plugins/" + pluginID + "/dashboard",
+		fullDashboardPath:         "/v0/resource/plugins/" + pluginID + "/full-dashboard",
+		fullModeSessionPath:       "/v0/management/plugins/" + pluginID + "/full-mode/session",
+		fullModeSessionRevokePath: "/v0/resource/plugins/" + pluginID + "/full-mode/session/revoke",
+		fullModeDataPath:          "/v0/resource/plugins/" + pluginID + "/full-mode/data",
+		fullModePricesPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/prices",
+		fullModePriceSyncPath:     "/v0/resource/plugins/" + pluginID + "/full-mode/prices/sync",
+		resourceStatsPath:         "/v0/resource/plugins/" + pluginID + "/stats",
+		resourceRequestsPath:      "/v0/resource/plugins/" + pluginID + "/requests",
+		resourceCostsPath:         "/v0/resource/plugins/" + pluginID + "/costs",
+		resourceExchangeRatePath:  "/v0/resource/plugins/" + pluginID + "/exchange-rate",
+		pricesPath:                "/v0/management/plugins/" + pluginID + "/prices",
+		priceSyncPath:             "/v0/management/plugins/" + pluginID + "/prices/sync",
+		resourcePricesPath:        "/v0/resource/plugins/" + pluginID + "/prices",
+		resourcePreferencesPath:   "/v0/resource/plugins/" + pluginID + "/preferences",
 	}
 	r.mu.Lock()
 	r.routes = routes
@@ -71,6 +83,11 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 
 	return managementRegistrationResponse{
 		Routes: []pluginapi.ManagementRoute{
+			{
+				Method:      http.MethodPost,
+				Path:        "/plugins/" + pluginID + "/full-mode/session",
+				Description: "Issue a short-lived capability for the separate full-mode dashboard.",
+			},
 			{
 				Method:      http.MethodGet,
 				Path:        "/plugins/" + pluginID + "/stats",
@@ -108,6 +125,11 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 				Menu:        "Token 用量",
 				Description: "查看持久化的 Token 用量、请求和延迟统计。",
 			},
+			{Path: "/full-dashboard", Description: "Full-mode dashboard shell without protected data."},
+			{Path: "/full-mode/data", Description: "Capability-protected full-mode data."},
+			{Path: "/full-mode/session/revoke", Description: "Revoke a full-mode capability."},
+			{Path: "/full-mode/prices", Description: "Capability-protected model prices."},
+			{Path: "/full-mode/prices/sync", Description: "Capability-protected model price synchronization."},
 			{
 				Path:        "/stats",
 				Description: "Read-only token usage statistics for the plugin dashboard.",
@@ -150,11 +172,51 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 	}
 
 	switch request.Path {
+	case routes.fullModeSessionPath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		return r.fullModeSessionResponse()
 	case routes.dashboardPath:
 		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return dashboardResponse(), nil
+	case routes.fullDashboardPath:
+		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return fullDashboardResponse(), nil
+	case routes.fullModeDataPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.fullModeDataResponse(request)
+	case routes.fullModeSessionRevokePath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		return r.revokeFullModeSessionResponse(request)
+	case routes.fullModePricesPath:
+		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+		}
+		switch {
+		case strings.EqualFold(request.Method, http.MethodGet):
+			return r.pricesResponse()
+		case strings.EqualFold(request.Method, http.MethodPut):
+			return r.savePricesResponse(request)
+		default:
+			return methodNotAllowed(http.MethodGet + ", " + http.MethodPut), nil
+		}
+	case routes.fullModePriceSyncPath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+		}
+		return r.syncPricesResponse(request)
 	case routes.statsPath, routes.resourceStatsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil

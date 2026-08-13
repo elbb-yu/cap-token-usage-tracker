@@ -610,27 +610,32 @@ func TestDashboardResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestFullModeUsesDashboardDialog(t *testing.T) {
+func TestFullModeUsesSeparateProtectedDashboard(t *testing.T) {
 	if !strings.Contains(dashboardHTML, `id="fullModeButton"`) || !strings.Contains(dashboardHTML, `id="fullModeDialog"`) {
 		t.Fatal("dashboard must provide a full-mode entry button and dialog")
 	}
-	if !strings.Contains(dashboardHTML, `managementBase+'/stats?range=24h'`) || !strings.Contains(dashboardHTML, `Authorization':'Bearer '+key`) {
-		t.Fatal("full-mode dialog must verify its management key through the stats route")
+	if !strings.Contains(dashboardHTML, `managementBase+'/full-mode/session'`) || !strings.Contains(dashboardHTML, `method:'POST'`) || !strings.Contains(dashboardHTML, `Authorization':'Bearer '+key`) {
+		t.Fatal("full-mode dialog must create an authenticated full-mode session")
 	}
-	if !strings.Contains(dashboardHTML, `button.exitFullMode`) || !strings.Contains(dashboardHTML, `function exitFullMode(){if(pricingDialog&&pricingDialog.open)closePricingDialog(false);fullModeManagementKey='';fullModeEnabled=false;updateFullModeButton();}`) {
-		t.Fatal("full-mode button must become an exit control and clear its in-memory key")
+	if !strings.Contains(dashboardHTML, `resourceBase+'/full-dashboard#session='+encodeURIComponent(session)`) || strings.Contains(dashboardHTML, `fullModeManagementKey=key`) {
+		t.Fatal("homepage must navigate with the opaque session token without retaining the management key")
 	}
 	if !strings.Contains(dashboardHTML, `id="pricingButton" class="control"`) || !strings.Contains(dashboardHTML, `data-i18n-title="button.pricing.title" hidden`) {
-		t.Fatal("model prices button must be hidden until full mode is enabled")
+		t.Fatal("model prices button must remain hidden on the normal dashboard")
 	}
-	if !strings.Contains(dashboardHTML, `pricingButton.hidden=!fullModeEnabled`) || !strings.Contains(dashboardHTML, `var managementKey=fullModeManagementKey`) {
-		t.Fatal("model prices must use the full-mode in-memory management key")
+	for _, required := range []string{`var fullModePage=true`, `button.exitFullMode`, `history.replaceState(null,'',window.location.pathname+window.location.search)`} {
+		if !strings.Contains(fullDashboardHTML, required) {
+			t.Fatalf("full dashboard missing %q", required)
+		}
 	}
-	if strings.Contains(dashboardHTML, `id="pricingKeyInput"`) || strings.Contains(dashboardHTML, `pricingKeyInput.value.trim()`) {
-		t.Fatal("model prices dialog must not request the management key again")
+	if !strings.Contains(fullDashboardHTML, `X-Full-Mode-Session`) || !strings.Contains(fullDashboardHTML, `resourceBase+'/full-mode/prices'`) || !strings.Contains(fullDashboardHTML, `function openPricing(){if(!fullModeEnabled||!fullModeSession)return;`) || strings.Contains(fullDashboardHTML, `fullModeManagementKey=key`) {
+		t.Fatal("full dashboard must use the server-issued capability for protected endpoints")
 	}
-	if strings.Contains(dashboardHTML, `full-dashboard`) || strings.Contains(dashboardHTML, `full-mode/session`) {
-		t.Fatal("dashboard must not expose a separate full-mode page or route")
+	if !strings.Contains(fullDashboardHTML, `api(resetURL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+managementKey}`) {
+		t.Fatal("full dashboard must retain management-key confirmation for reset")
+	}
+	if strings.Contains(fullDashboardHTML, `sensitive_data":[]`) {
+		t.Fatal("full dashboard HTML must not embed protected data")
 	}
 }
 

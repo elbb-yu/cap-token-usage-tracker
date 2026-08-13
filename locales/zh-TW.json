@@ -314,7 +314,7 @@
   "button.exitFullMode": "退出完整模式",
   "button.unlockFullMode": "解鎖",
   "fullMode.title": "完整模式",
-  "fullMode.description": "輸入 CLIProxyAPI 管理密鑰以在目前頁面工作階段中解鎖完整模式。",
+  "fullMode.description": "輸入 CLIProxyAPI 管理密鑰以開啟獨立的完整模式儀表板。",
   "fullMode.managementKey": "CLIProxyAPI 管理密鑰",
   "fullMode.keyRequired": "請輸入 CLIProxyAPI 管理密鑰。"
 }

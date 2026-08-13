@@ -13,6 +13,7 @@ import (
 var localeFS embed.FS
 
 var dashboardHTML string
+var fullDashboardHTML string
 
 func init() {
 	localeData := make(map[string]map[string]string)
@@ -33,11 +34,34 @@ func init() {
 	}
 	dashboardHTML = strings.NewReplacer(
 		"/*LOCALE_PLACEHOLDER*/", string(jsonBytes),
+		"/*FULL_MODE_PAGE*/", "false",
+	).Replace(dashboardHTMLTemplate)
+	fullDashboardHTML = strings.NewReplacer(
+		"/*LOCALE_PLACEHOLDER*/", string(jsonBytes),
+		"/*FULL_MODE_PAGE*/", "true",
+		"document.getElementById('fullModeUnlockButton').addEventListener('click',function(){unlockFullMode().catch(function(error){text('fullModeError',error.message);});});", "if(fullModeKeyInput&&fullModeDialog){document.getElementById('fullModeUnlockButton').addEventListener('click',function(){unlockFullMode().catch(function(error){text('fullModeError',error.message);});});}",
+		"fullModeKeyInput.addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();unlockFullMode().catch(function(error){text('fullModeError',error.message);});}});", "if(fullModeKeyInput){fullModeKeyInput.addEventListener('keydown',function(event){if(event.key==='Enter'){event.preventDefault();unlockFullMode().catch(function(error){text('fullModeError',error.message);});}});}",
+		"fullModeDialog.addEventListener('close',function(){fullModeKeyInput.value='';text('fullModeError','');});", "if(fullModeDialog){fullModeDialog.addEventListener('close',function(){fullModeKeyInput.value='';text('fullModeError','');});}",
+		"document.getElementById('fullModeButton').addEventListener('click',handleFullModeButton);", "document.getElementById('fullModeButton').addEventListener('click',handleFullModeButton);if(fullModePage){var fullModeHash=window.location.hash.replace(/^#/,''),fullModeParams=new URLSearchParams(fullModeHash);fullModeSession=fullModeParams.get('session')||'';history.replaceState(null,'',window.location.pathname+window.location.search);if(!fullModeSession){text('error',t('fullMode.keyRequired'));return;}api(resourceBase+'/full-mode/data').catch(function(error){fullModeSession='';text('error',error.message);}).then(function(){if(fullModeSession)startDashboard();});}",
+		"function exitFullMode(){if(!fullModePage)return;if(pricingDialog&&pricingDialog.open)closePricingDialog(false);fullModeSession='';window.location.assign(resourceBase+'/dashboard');}", "function exitFullMode(){if(!fullModePage)return;if(pricingDialog&&pricingDialog.open)closePricingDialog(false);var session=fullModeSession;fullModeSession='';if(session)fetch(resourceBase+'/full-mode/session/revoke',{method:'POST',headers:{'X-Full-Mode-Session':session},credentials:'same-origin',keepalive:true}).catch(function(){});window.location.assign(resourceBase+'/dashboard');}",
+		"var pricesURL=resourceBase+'/prices'", "var pricesURL=resourceBase+'/full-mode/prices'",
+		"var savePricesURL=managementBase+'/prices'", "var savePricesURL=resourceBase+'/full-mode/prices'",
+		"var syncPricesURL=managementBase+'/prices/sync'", "var syncPricesURL=resourceBase+'/full-mode/prices/sync'",
+		"async function savePricing(){var managementKey=fullModeManagementKey;if(!fullModeEnabled||!managementKey){", "async function savePricing(){if(!fullModeEnabled||!fullModeSession){",
+		"async function syncPricing(){var managementKey=fullModeManagementKey;if(!fullModeEnabled||!managementKey){", "async function syncPricing(){if(!fullModeEnabled||!fullModeSession){",
+		"function openPricing(){if(!fullModeEnabled||!fullModeManagementKey)return;", "function openPricing(){if(!fullModeEnabled||!fullModeSession)return;",
+		"await api(savePricesURL,{method:'PUT',headers:{'Content-Type':'application/json','Authorization':'Bearer '+managementKey}", "await api(savePricesURL,{method:'PUT',headers:{'Content-Type':'application/json','X-Full-Mode-Session':fullModeSession}",
+		"await api(syncPricesURL,{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+managementKey}", "await api(syncPricesURL,{method:'POST',headers:{'Content-Type':'application/json','X-Full-Mode-Session':fullModeSession}",
+		"if(!pluginID){text('error','Cannot identify plugin ID from resource URL.');return;}startDashboard();", "if(!pluginID){text('error','Cannot identify plugin ID from resource URL.');return;}if(!fullModePage)startDashboard();",
 	).Replace(dashboardHTMLTemplate)
 }
 
 func dashboardResponse() pluginapi.ManagementResponse {
 	return dashboardHTMLResponse(dashboardHTML)
+}
+
+func fullDashboardResponse() pluginapi.ManagementResponse {
+	return dashboardHTMLResponse(fullDashboardHTML)
 }
 
 func dashboardHTMLResponse(html string) pluginapi.ManagementResponse {
@@ -227,14 +251,15 @@ function applyFrameBackground(background){try{if(window.frameElement){window.fra
 function applyResolvedTheme(theme,background){var root=document.documentElement;if(theme==='light')root.removeAttribute('data-theme');else root.setAttribute('data-theme',theme);background=background||themeBackground(theme);root.style.backgroundColor=background;root.style.colorScheme=theme==='dark'?'dark':'light';applyFrameBackground(background);}
 function readCLIProxyTheme(){try{if(window.parent===window)return null;var parentRoot=window.parent.document.documentElement,parentTheme=parentRoot.getAttribute('data-theme'),background=window.parent.getComputedStyle(parentRoot).getPropertyValue('--bg-secondary').trim();return {theme:parentTheme==='dark'||parentTheme==='white'?parentTheme:'light',background:background};}catch(_error){return null;}}
 function initializeThemeSync(){var parentTheme=readCLIProxyTheme();if(parentTheme!==null){applyResolvedTheme(parentTheme.theme,parentTheme.background);try{new MutationObserver(function(){var next=readCLIProxyTheme();if(next!==null){applyResolvedTheme(next.theme,next.background);if(currentData)renderVisuals();}var pl=readParentLocale();if(pl&&pl!==locale){locale=pl;formatterLocale=locale==='zh-CN'?'zh-CN':locale==='zh-TW'?'zh-TW':locale==='ru'?'ru-RU':'en-US';document.documentElement.lang=locale;moneyFormatters=Object.create(null);translateStatic();if(currentData)renderVisuals();if(currentRequestPage)renderRequests(currentRequestPage);updateTokenUnitButton();updateCurrencyButton();if(pricingDialog&&pricingDialog.open)renderPricingStatus();}}).observe(window.parent.document.documentElement,{attributes:true,attributeFilter:['data-theme','style','class','lang']});}catch(_error){}return;}var media=window.matchMedia?window.matchMedia('(prefers-color-scheme: dark)'):null;if(media){var sync=function(event){applyResolvedTheme(event.matches?'dark':'white');if(currentData)renderVisuals();};sync(media);if(media.addEventListener)media.addEventListener('change',sync);else if(media.addListener)media.addListener(sync);}}
-async function api(url,options){var controller=new AbortController(),opts=Object.assign({},options||{}),timeout=Number(opts.timeout||10000);delete opts.timeout;var timer=setTimeout(function(){controller.abort();},timeout);try{opts=Object.assign(opts,{signal:controller.signal,credentials:'same-origin'});var response=await fetch(url,opts);var payload=await response.json().catch(function(){return {};});if(!response.ok)throw new Error(payload.error||t('error.api',{status:response.status}));return payload;}finally{clearTimeout(timer);}}
-var fullModeEnabled=false,fullModeManagementKey='',fullModeDialog=document.getElementById('fullModeDialog'),fullModeKeyInput=document.getElementById('fullModeKeyInput');
+async function api(url,options){var controller=new AbortController(),opts=Object.assign({},options||{}),timeout=Number(opts.timeout||10000);delete opts.timeout;var timer=setTimeout(function(){controller.abort();},timeout);try{opts=Object.assign(opts,{signal:controller.signal,credentials:'same-origin'});if(fullModePage&&fullModeSession&&String(url).indexOf('/full-mode/')>=0){opts.headers=Object.assign({},opts.headers||{}, {'X-Full-Mode-Session':fullModeSession});}var response=await fetch(url,opts);var payload=await response.json().catch(function(){return {};});if(!response.ok)throw new Error(payload.error||t('error.api',{status:response.status}));return payload;}finally{clearTimeout(timer);}}
+var fullModePage=/*FULL_MODE_PAGE*/,fullModeEnabled=fullModePage,fullModeManagementKey='',fullModeSession='',fullModeDialog=document.getElementById('fullModeDialog'),fullModeKeyInput=document.getElementById('fullModeKeyInput');
+updateFullModeButton();
 function startDashboard(){loadDashboardPreferences().catch(function(error){text('error',error.message);}).then(function(){return load(true);}).catch(function(error){text('error',error.message);});startTimer();}
 function updateFullModeButton(){var button=document.getElementById('fullModeButton');if(button){var label=button.querySelector('.button-label'),value=t(fullModeEnabled?'button.exitFullMode':'button.fullMode');button.title=value;if(label)label.textContent=value;}var pricingButton=document.getElementById('pricingButton');if(pricingButton)pricingButton.hidden=!fullModeEnabled;}
 function openFullModeDialog(){fullModeKeyInput.value='';text('fullModeError','');fullModeDialog.showModal();fullModeKeyInput.focus();}
-function exitFullMode(){if(pricingDialog&&pricingDialog.open)closePricingDialog(false);fullModeManagementKey='';fullModeEnabled=false;updateFullModeButton();}
-function handleFullModeButton(){if(fullModeEnabled){exitFullMode();return;}openFullModeDialog();}
-async function unlockFullMode(){var key=fullModeKeyInput.value.trim();if(!key){text('fullModeError',t('fullMode.keyRequired'));fullModeKeyInput.focus();return;}var button=document.getElementById('fullModeUnlockButton');button.disabled=true;text('fullModeError','');try{await api(managementBase+'/stats?range=24h',{headers:{'Authorization':'Bearer '+key}});fullModeManagementKey=key;fullModeEnabled=true;fullModeKeyInput.value='';fullModeDialog.close();updateFullModeButton();}catch(error){fullModeKeyInput.value='';text('fullModeError',error.message);fullModeKeyInput.focus();}finally{button.disabled=false;}}
+function exitFullMode(){if(!fullModePage)return;if(pricingDialog&&pricingDialog.open)closePricingDialog(false);fullModeSession='';window.location.assign(resourceBase+'/dashboard');}
+function handleFullModeButton(){if(fullModePage){exitFullMode();return;}openFullModeDialog();}
+async function unlockFullMode(){var key=fullModeKeyInput.value.trim();if(!key){text('fullModeError',t('fullMode.keyRequired'));fullModeKeyInput.focus();return;}var button=document.getElementById('fullModeUnlockButton');button.disabled=true;text('fullModeError','');try{var result=await api(managementBase+'/full-mode/session',{method:'POST',headers:{'Authorization':'Bearer '+key}}),session=String(result.session||'');fullModeKeyInput.value='';if(!session)throw new Error(t('error.api',{status:500}));window.location.assign(resourceBase+'/full-dashboard#session='+encodeURIComponent(session));}catch(error){fullModeKeyInput.value='';text('fullModeError',error.message);fullModeKeyInput.focus();}finally{button.disabled=false;}}
 function dashboardPreferencesPayload(){return {request_page_size:requestLimit,dimension_page_size:dimensionLimit,hidden_request_columns:Array.from(hiddenRequestColumns),hidden_dimension_columns:Array.from(hiddenDimensionColumns),time_range_mode:appliedRangeMode,time_range_start:appliedRangeMode==='custom'?appliedRangeStart.toISOString():'',time_range_end:appliedRangeMode==='custom'?appliedRangeEnd.toISOString():''};}
 function validHiddenColumns(values,columns){var allowed=new Set(columns.map(function(column){return column.key;})),result=[];(Array.isArray(values)?values:[]).forEach(function(key){if(allowed.has(key)&&result.indexOf(key)<0)result.push(key);});return result.length<columns.length?result:result.slice(0,Math.max(0,columns.length-1));}
 function parseLocalDate(value){var match=String(value||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);if(!match)return null;var date=new Date(Number(match[1]),Number(match[2])-1,Number(match[3]));return dateKey(date)===value?date:null;}

@@ -314,7 +314,7 @@
   "button.exitFullMode": "Exit full mode",
   "button.unlockFullMode": "Unlock",
   "fullMode.title": "Full mode",
-  "fullMode.description": "Enter the CLIProxyAPI management key to unlock full mode for this page session.",
+  "fullMode.description": "Enter the CLIProxyAPI management key to open the separate full-mode dashboard.",
   "fullMode.managementKey": "CLIProxyAPI management key",
   "fullMode.keyRequired": "Enter the CLIProxyAPI management key."
 }

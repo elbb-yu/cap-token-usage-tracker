@@ -45,6 +45,8 @@ type pluginRuntime struct {
 	exchangeRates    *exchangeRateService
 	authResolver     *authIdentityResolver
 	priceSyncing     bool
+	fullModeMu       sync.Mutex
+	fullModeSessions map[[32]byte]fullModeSession
 }
 
 var runtimeState = &pluginRuntime{}
@@ -112,6 +114,9 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 	r.store = next
 	r.config = config
 	r.mu.Unlock()
+	r.fullModeMu.Lock()
+	r.fullModeSessions = nil
+	r.fullModeMu.Unlock()
 	if old != nil {
 		if err := old.Close(); err != nil {
 			return fmt.Errorf("close previous store: %w", err)
@@ -149,6 +154,9 @@ func (r *pluginRuntime) shutdown() error {
 	r.exchangeRates = nil
 	r.authResolver = nil
 	r.mu.Unlock()
+	r.fullModeMu.Lock()
+	r.fullModeSessions = nil
+	r.fullModeMu.Unlock()
 	if store == nil {
 		return nil
 	}
