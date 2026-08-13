@@ -611,18 +611,15 @@ func TestDashboardResponseHeaders(t *testing.T) {
 	}
 }
 
-func TestFullDashboardStartsLockedWhileDashboardDoesNot(t *testing.T) {
-	if !strings.Contains(dashboardHTML, `data-full-mode="false"`) || !strings.Contains(dashboardHTML, `id="fullModeGate" class="full-mode-gate" hidden`) {
-		t.Fatal("normal dashboard must keep the full-mode gate hidden")
+func TestFullModeUsesDashboardDialog(t *testing.T) {
+	if !strings.Contains(dashboardHTML, `id="fullModeButton"`) || !strings.Contains(dashboardHTML, `id="fullModeDialog"`) {
+		t.Fatal("dashboard must provide a full-mode entry button and dialog")
 	}
-	if !strings.Contains(fullDashboardHTML, `data-full-mode="true"`) || strings.Contains(fullDashboardHTML, `id="fullModeGate" class="full-mode-gate" hidden`) {
-		t.Fatal("full dashboard must start with the full-mode gate visible")
+	if !strings.Contains(dashboardHTML, `managementBase+'/stats?range=24h'`) || !strings.Contains(dashboardHTML, `Authorization':'Bearer '+key`) {
+		t.Fatal("full-mode dialog must verify its management key through the stats route")
 	}
-	if !strings.Contains(fullDashboardHTML, `full-mode/session`) || !strings.Contains(fullDashboardHTML, `Authorization':'Bearer '+key`) {
-		t.Fatal("full dashboard must validate the management key before loading data")
-	}
-	if fullDashboardResponse().Headers.Get("Cache-Control") != "no-store" {
-		t.Fatal("full dashboard response must not be cached")
+	if strings.Contains(dashboardHTML, `full-dashboard`) || strings.Contains(dashboardHTML, `full-mode/session`) {
+		t.Fatal("dashboard must not expose a separate full-mode page or route")
 	}
 }
 

@@ -29,8 +29,6 @@ type registeredRoutes struct {
 	backupPath               string
 	restorePath              string
 	dashboardPath            string
-	fullDashboardPath        string
-	fullModeSessionPath      string
 	resourceStatsPath        string
 	resourceRequestsPath     string
 	resourceCostsPath        string
@@ -58,8 +56,6 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		backupPath:               "/v0/management/plugins/" + pluginID + "/backup",
 		restorePath:              "/v0/management/plugins/" + pluginID + "/restore",
 		dashboardPath:            "/v0/resource/plugins/" + pluginID + "/dashboard",
-		fullDashboardPath:        "/v0/resource/plugins/" + pluginID + "/full-dashboard",
-		fullModeSessionPath:      "/v0/management/plugins/" + pluginID + "/full-mode/session",
 		resourceStatsPath:        "/v0/resource/plugins/" + pluginID + "/stats",
 		resourceRequestsPath:     "/v0/resource/plugins/" + pluginID + "/requests",
 		resourceCostsPath:        "/v0/resource/plugins/" + pluginID + "/costs",
@@ -105,21 +101,12 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 				Path:        "/plugins/" + pluginID + "/restore",
 				Description: "Restore the persisted token usage database from a previous backup.",
 			},
-			{
-				Method:      http.MethodGet,
-				Path:        "/plugins/" + pluginID + "/full-mode/session",
-				Description: "Validate a CLIProxyAPI management key before opening the full dashboard.",
-			},
 		},
 		Resources: []pluginapi.ResourceRoute{
 			{
 				Path:        "/dashboard",
 				Menu:        "Token 用量",
 				Description: "查看持久化的 Token 用量、请求和延迟统计。",
-			},
-			{
-				Path:        "/full-dashboard",
-				Description: "Management-key-protected full dashboard.",
 			},
 			{
 				Path:        "/stats",
@@ -168,17 +155,6 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return dashboardResponse(), nil
-	case routes.fullDashboardPath:
-		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
-			return methodNotAllowed(http.MethodGet), nil
-		}
-		return fullDashboardResponse(), nil
-	case routes.fullModeSessionPath:
-		if !strings.EqualFold(request.Method, http.MethodGet) {
-			return methodNotAllowed(http.MethodGet), nil
-		}
-		// CLIProxyAPI validates the management key before dispatching management routes.
-		return jsonResponse(http.StatusOK, map[string]bool{"authorized": true}), nil
 	case routes.statsPath, routes.resourceStatsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil

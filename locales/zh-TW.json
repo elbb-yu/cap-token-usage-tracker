@@ -312,9 +312,8 @@
   "backup.fileTooLarge": "備份檔案過大（最大 64 MB）",
   "button.fullMode": "完整模式",
   "button.unlockFullMode": "解鎖",
-  "button.backToDashboard": "返回",
   "fullMode.title": "完整模式",
-  "fullMode.description": "輸入 CLIProxyAPI 管理密鑰以在目前頁面工作階段中開啟完整儀表板。",
+  "fullMode.description": "輸入 CLIProxyAPI 管理密鑰以在目前頁面工作階段中解鎖完整模式。",
   "fullMode.managementKey": "CLIProxyAPI 管理密鑰",
   "fullMode.keyRequired": "請輸入 CLIProxyAPI 管理密鑰。"
 }

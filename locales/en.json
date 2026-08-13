@@ -312,9 +312,8 @@
   "backup.fileTooLarge": "Backup file is too large (maximum 64 MB)",
   "button.fullMode": "Full mode",
   "button.unlockFullMode": "Unlock",
-  "button.backToDashboard": "Back",
   "fullMode.title": "Full mode",
-  "fullMode.description": "Enter the CLIProxyAPI management key to open the full dashboard for this page session.",
+  "fullMode.description": "Enter the CLIProxyAPI management key to unlock full mode for this page session.",
   "fullMode.managementKey": "CLIProxyAPI management key",
   "fullMode.keyRequired": "Enter the CLIProxyAPI management key."
 }
