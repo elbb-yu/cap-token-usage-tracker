@@ -178,7 +178,16 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 
 	r.mu.RLock()
 	routes := r.routes
+	config := r.config
 	r.mu.RUnlock()
+	response, err := r.dispatchManagement(request, routes)
+	if err != nil {
+		return pluginapi.ManagementResponse{}, err
+	}
+	return maybeCompressResponse(request, response, config), nil
+}
+
+func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, routes registeredRoutes) (pluginapi.ManagementResponse, error) {
 	if routes.pluginID == "" {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "management routes are not registered"}), nil
 	}

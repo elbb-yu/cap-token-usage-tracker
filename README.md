@@ -120,6 +120,8 @@ plugins:
       flush_max_records: 100
       sync_on_record: true
       api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
+      response_compression: true
+      response_compression_min_bytes: 1024
 ```
 
 | 字段 | 默认值 | 说明 |
@@ -130,10 +132,14 @@ plugins:
 | `flush_max_records` | `100` | 批量模式达到该记录数时立即刷盘，范围 1-1000000 |
 | `sync_on_record` | `true` | 每条记录提交数据库后再确认；设为 `false` 时启用批量模式 |
 | `api_key_secret` | `123456` | API Key 加密和带密钥指纹使用的密钥；自定义值至少 32 字节，空字符串禁用 API Key 跟踪 |
+| `response_compression` | `true` | 客户端支持 gzip 时压缩公共仪表盘 HTML 和 JSON 响应；管理接口保持未压缩 |
+| `response_compression_min_bytes` | `1024` | 启用 gzip 的最小响应字节数，范围 0-16777216 |
 
 示例中的 `api_key_secret` 只是占位符，部署时必须替换。含 `#`、`:`、`{}` 等特殊字符的值应使用 YAML 引号包裹；长度按 UTF-8 字节计算。该密钥会保存在 CLIProxyAPI 配置中，因此应限制配置文件权限，避免提交到公开仓库，也不要与数据库备份一起分发。
 
 默认 `sync_on_record: true` 优先保证记录持久化。设为 `false` 可以减少写入次数，但进程被强制终止时，最多可能丢失一个 `flush_interval` 或尚未达到 `flush_max_records` 的窗口。
+
+默认 `response_compression: true` 通过标准 `Accept-Encoding` 协商启用 gzip，因此直接访问 CLIProxyAPI IP 和端口的现代浏览器也能获得压缩响应。不支持 gzip 或显式发送 `gzip;q=0` 的客户端仍会收到原始响应；二进制备份、已编码响应和 `/v0/management/` 接口不会由插件压缩。
 
 未配置 `data_path` 时，插件按以下顺序定位数据库：
 
@@ -392,6 +398,8 @@ plugins:
       flush_max_records: 100
       sync_on_record: true
       api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
+      response_compression: true
+      response_compression_min_bytes: 1024
 ```
 
 | Field | Default | Description |
@@ -402,10 +410,14 @@ plugins:
 | `flush_max_records` | `100` | Flush after this many batched records, from 1 to 1000000 |
 | `sync_on_record` | `true` | Commit each record before acknowledgment; set to `false` for batch mode |
 | `api_key_secret` | `123456` | Secret used for API-key encryption and keyed fingerprints; custom values must be at least 32 bytes, and an empty string disables API-key tracking |
+| `response_compression` | `true` | Compress public dashboard HTML and JSON responses when the client supports gzip; management endpoints remain uncompressed |
+| `response_compression_min_bytes` | `1024` | Minimum response size in bytes before gzip is used, from 0 to 16777216 |
 
 The `api_key_secret` in the example is a placeholder and must be replaced for deployment. Quote YAML values containing special characters such as `#`, `:`, or `{}`; the minimum length is measured in UTF-8 bytes. The secret is stored in CLIProxyAPI configuration, so restrict access to that file, do not commit it to a public repository, and do not distribute it with database backups.
 
 The default `sync_on_record: true` prioritizes durability. With batch mode enabled, a forced process termination may lose up to one `flush_interval` or the records below the `flush_max_records` threshold.
+
+The default `response_compression: true` negotiates gzip through the standard `Accept-Encoding` header, so modern browsers connecting directly to the CLIProxyAPI IP and port also receive compressed responses. Clients that do not support gzip or explicitly send `gzip;q=0` still receive the original response. Binary backups, already encoded responses, and `/v0/management/` endpoints are not compressed by the plugin.
 
 Without an explicit `data_path`, the plugin resolves the database in this order:
 

@@ -10,37 +10,46 @@ import (
 )
 
 const (
-	defaultRetentionDays   = 30
-	defaultFlushInterval   = 5 * time.Second
-	defaultFlushMaxRecords = 100
+	defaultRetentionDays               = 30
+	defaultFlushInterval               = 5 * time.Second
+	defaultFlushMaxRecords             = 100
+	defaultResponseCompression         = true
+	defaultResponseCompressionMinBytes = 1024
+	maxResponseCompressionMinBytes     = 16 << 20
 )
 
 type Config struct {
-	DataPath        string
-	RetentionDays   int
-	FlushInterval   time.Duration
-	FlushMaxRecords int
-	SyncOnRecord    bool
-	APIKeySecret    string
+	DataPath                    string
+	RetentionDays               int
+	FlushInterval               time.Duration
+	FlushMaxRecords             int
+	SyncOnRecord                bool
+	APIKeySecret                string
+	ResponseCompression         bool
+	ResponseCompressionMinBytes int
 }
 
 type configYAML struct {
-	DataPath        string  `yaml:"data_path"`
-	RetentionDays   *int    `yaml:"retention_days"`
-	FlushInterval   string  `yaml:"flush_interval"`
-	FlushMaxRecords *int    `yaml:"flush_max_records"`
-	SyncOnRecord    *bool   `yaml:"sync_on_record"`
-	APIKeySecret    *string `yaml:"api_key_secret"`
+	DataPath                    string  `yaml:"data_path"`
+	RetentionDays               *int    `yaml:"retention_days"`
+	FlushInterval               string  `yaml:"flush_interval"`
+	FlushMaxRecords             *int    `yaml:"flush_max_records"`
+	SyncOnRecord                *bool   `yaml:"sync_on_record"`
+	APIKeySecret                *string `yaml:"api_key_secret"`
+	ResponseCompression         *bool   `yaml:"response_compression"`
+	ResponseCompressionMinBytes *int    `yaml:"response_compression_min_bytes"`
 }
 
 func defaultConfig() Config {
 	return Config{
-		DataPath:        resolvedDefaultDataPath(),
-		RetentionDays:   defaultRetentionDays,
-		FlushInterval:   defaultFlushInterval,
-		FlushMaxRecords: defaultFlushMaxRecords,
-		SyncOnRecord:    true,
-		APIKeySecret:    defaultAPIKeySecret,
+		DataPath:                    resolvedDefaultDataPath(),
+		RetentionDays:               defaultRetentionDays,
+		FlushInterval:               defaultFlushInterval,
+		FlushMaxRecords:             defaultFlushMaxRecords,
+		SyncOnRecord:                true,
+		APIKeySecret:                defaultAPIKeySecret,
+		ResponseCompression:         defaultResponseCompression,
+		ResponseCompressionMinBytes: defaultResponseCompressionMinBytes,
 	}
 }
 
@@ -76,6 +85,12 @@ func parseConfig(raw []byte) (Config, error) {
 	if input.APIKeySecret != nil {
 		cfg.APIKeySecret = *input.APIKeySecret
 	}
+	if input.ResponseCompression != nil {
+		cfg.ResponseCompression = *input.ResponseCompression
+	}
+	if input.ResponseCompressionMinBytes != nil {
+		cfg.ResponseCompressionMinBytes = *input.ResponseCompressionMinBytes
+	}
 	return normalizeConfig(cfg)
 }
 
@@ -94,6 +109,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.APIKeySecret != "" && cfg.APIKeySecret != defaultAPIKeySecret && len([]byte(cfg.APIKeySecret)) < 32 {
 		return Config{}, fmt.Errorf("api_key_secret must be empty, 123456, or at least 32 bytes")
+	}
+	if cfg.ResponseCompressionMinBytes < 0 || cfg.ResponseCompressionMinBytes > maxResponseCompressionMinBytes {
+		return Config{}, fmt.Errorf("response_compression_min_bytes must be between 0 and %d", maxResponseCompressionMinBytes)
 	}
 	absolute, err := filepath.Abs(filepath.Clean(cfg.DataPath))
 	if err != nil {

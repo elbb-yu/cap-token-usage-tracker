@@ -273,6 +273,8 @@ func pluginRegistration(schemaVersion uint32) registration {
 				{Name: "flush_max_records", Type: pluginapi.ConfigFieldTypeInteger, Description: "Flush after this many accepted usage records."},
 				{Name: "sync_on_record", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Commit every usage record before acknowledging it."},
 				{Name: "api_key_secret", Type: pluginapi.ConfigFieldTypeString, Description: "Secret for API-key encryption and keyed fingerprints. Defaults to 123456; set a custom value of at least 32 bytes for protection against database disclosure. Empty disables API-key tracking. Changing the value starts a new crypto generation while preserving historical records."},
+				{Name: "response_compression", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Compress eligible public dashboard HTML and JSON responses with gzip when supported by the client. Defaults to true."},
+				{Name: "response_compression_min_bytes", Type: pluginapi.ConfigFieldTypeInteger, Description: "Minimum eligible public response size in bytes before gzip compression. Defaults to 1024; range 0-16777216."},
 			},
 		},
 		Capabilities: registrationCapabilities{UsagePlugin: true, ManagementAPI: true},
