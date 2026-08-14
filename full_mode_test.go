@@ -288,6 +288,71 @@ func TestFullModeBackupAndRestoreRequireSession(t *testing.T) {
 	}
 }
 
+func TestFullModeResetRequiresSession(t *testing.T) {
+	config := testConfig(t)
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config}
+	defer runtime.shutdown()
+
+	raw, _ := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
+	if _, err := runtime.registerManagement(raw); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(normalizedUsage{Dimensions: Dimensions{Model: "reset-model"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 5}}); err != nil {
+		t.Fatal(err)
+	}
+
+	body := []byte(`{"confirm":"reset"}`)
+	headers := http.Header{"Content-Type": []string{"application/json"}}
+
+	unauthorized, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeResetPath, Headers: headers.Clone(), Body: body})
+	response, err := runtime.handleManagement(unauthorized)
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing session reset response: %+v, %v", response, err)
+	}
+
+	badSessionHeaders := headers.Clone()
+	badSessionHeaders.Set("X-Full-Mode-Session", "bogus-session-token")
+	badSessionRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeResetPath, Headers: badSessionHeaders, Body: body})
+	response, err = runtime.handleManagement(badSessionRequest)
+	if err != nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("invalid session reset response: %+v, %v", response, err)
+	}
+
+	getRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeResetPath})
+	response, err = runtime.handleManagement(getRequest)
+	if err != nil || response.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("wrong method reset response: %+v, %v", response, err)
+	}
+
+	session, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorizedHeaders := headers.Clone()
+	authorizedHeaders.Set("X-Full-Mode-Session", session)
+	authorized, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.fullModeResetPath, Headers: authorizedHeaders, Body: body})
+	response, err = runtime.handleManagement(authorized)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"reset":true`) {
+		t.Fatalf("authorized reset response: %+v, %v", response, err)
+	}
+
+	statsRequest, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.resourceStatsPath, Query: map[string][]string{"range": {"24h"}}})
+	response, err = runtime.handleManagement(statsRequest)
+	if err != nil || response.StatusCode != http.StatusOK || strings.Contains(string(response.Body), "reset-model") {
+		t.Fatalf("stats after reset: %+v, %v", response, err)
+	}
+
+	managementReset, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodPost, Path: runtime.routes.resetPath, Headers: headers.Clone(), Body: body})
+	response, err = runtime.handleManagement(managementReset)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("management reset route must remain available: %+v, %v", response, err)
+	}
+}
+
 func containsSensitiveFullModePayload(body []byte) bool {
 	var payload struct {
 		FullMode bool `json:"full_mode"`

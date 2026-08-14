@@ -40,6 +40,7 @@ type registeredRoutes struct {
 	fullModePriceSyncPath     string
 	fullModeBackupPath        string
 	fullModeRestorePath       string
+	fullModeResetPath         string
 	resourceStatsPath         string
 	resourceStatsInitialPath  string
 	resourceStatsTrendPath    string
@@ -80,6 +81,7 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		fullModePriceSyncPath:     "/v0/resource/plugins/" + pluginID + "/full-mode/prices/sync",
 		fullModeBackupPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/backup",
 		fullModeRestorePath:       "/v0/resource/plugins/" + pluginID + "/full-mode/restore",
+		fullModeResetPath:         "/v0/resource/plugins/" + pluginID + "/full-mode/reset",
 		resourceStatsPath:         "/v0/resource/plugins/" + pluginID + "/stats",
 		resourceStatsInitialPath:  "/v0/resource/plugins/" + pluginID + "/stats/initial",
 		resourceStatsTrendPath:    "/v0/resource/plugins/" + pluginID + "/stats/trends",
@@ -149,6 +151,7 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 			{Path: "/full-mode/prices/sync", Description: "Capability-protected model price synchronization."},
 			{Path: "/full-mode/backup", Description: "Capability-protected database backup download."},
 			{Path: "/full-mode/restore", Description: "Capability-protected database backup restore."},
+			{Path: "/full-mode/reset", Description: "Capability-protected statistics reset."},
 			{Path: "/stats", Description: "Read full token usage statistics for compatible clients."},
 			{Path: "/stats/initial", Description: "Read compact first-screen token usage statistics."},
 			{Path: "/stats/trends", Description: "Read downsampled per-model token trends."},
@@ -261,6 +264,14 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.fullModeRestoreResponse(request)
+	case routes.fullModeResetPath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+		}
+		return r.resetResponse(request)
 	case routes.statsPath, routes.resourceStatsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil

@@ -163,7 +163,8 @@ plugins:
 - 切换 Token 显示单位和 USD/CNY
 - 调整逐请求表和维度表的可见列、排序和分页大小
 - 手动刷新；页面默认每 15 秒自动刷新
-- 使用管理密钥和显式确认重置统计数据
+
+重置统计入口只在完整模式可用，需要当前完整模式会话和显式确认。
 
 表格偏好和时间范围保存在插件数据库中。自定义时间按浏览器本地时区选择，再转换为 UTC RFC3339 时间戳请求。
 
@@ -183,6 +184,7 @@ plugins:
 - 将当前 Dashboard 导出为 PNG
 - 下载完整 bbolt 数据库备份
 - 从备份文件恢复数据库
+- 重置统计数据（需通过完整模式会话鉴权）
 
 备份文件最大为 64 MiB。恢复会替换当前数据库，需要用户确认，并在服务端校验 `X-Confirm-Restore: replace`。完整模式通过分段上传传输恢复数据，每次上传及其会话均有过期时间。
 
@@ -220,6 +222,7 @@ plugins:
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/sync` | 分段提交 models.dev 同步请求 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/backup` | 下载数据库备份 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/restore` | 分段上传并恢复数据库 |
+| `POST` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/reset` | 校验会话后重置统计 |
 
 除页面壳外，完整模式资源均要求：
 
@@ -439,7 +442,7 @@ Without an explicit `data_path`, the plugin resolves the database in this order:
 
 ### Dashboard Operations
 
-Both modes support preset or custom date-time ranges, source and authenticated-account filtering, trend granularity and zoom, model drill-down, token and currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and management-key-confirmed statistics reset.
+Both modes support preset or custom date-time ranges, source and authenticated-account filtering, trend granularity and zoom, model drill-down, token and currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and preset/custom table page sizes. Statistics reset is available only in full mode and requires the active session plus explicit confirmation.
 
 Table preferences and the selected range are stored in the plugin database. Custom browser-local times are converted to UTC RFC3339 timestamps for requests.
 
@@ -453,7 +456,7 @@ Manual entries take precedence and are not overwritten by synchronization. The p
 
 ### Export, Backup, and Restore
 
-CSV export, Dashboard PNG export, database backup, and database restore are available only in full mode and validate the active session when executed.
+CSV export, Dashboard PNG export, database backup, database restore, and statistics reset are available only in full mode and validate the active session when executed.
 
 Backup files are limited to 64 MiB. Restore replaces the current database, requires user confirmation, and is checked server-side with `X-Confirm-Restore: replace`. Full mode uses staged uploads for restore payloads, and uploads expire with their session.
 
@@ -491,6 +494,7 @@ Full-mode resources:
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/sync` | Synchronize models.dev through a staged payload |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/backup` | Download a database backup |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/restore` | Upload and restore a backup in stages |
+| `POST` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/reset` | Reset statistics after validating the session |
 
 All full-mode resources except the page shell require:
 
