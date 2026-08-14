@@ -69,6 +69,7 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 		t.Fatalf("request page = %+v, %v", page, err)
 	}
 	hashA := apiKeyFingerprint(keyA, crypto.indexKey)
+	refA := apiKeyRef(1, hashA)
 	var ciphertexts []string
 	for _, item := range page.Items {
 		if item.APIKeyHash == hashA {
@@ -110,7 +111,7 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 	if ordinary.StatusCode != http.StatusOK {
 		t.Fatalf("ordinary stats: %+v", ordinary)
 	}
-	for _, forbidden := range []string{keyA, keyB, `"api_key"`, `"api_key_hash"`, `"api_keys"`} {
+	for _, forbidden := range []string{keyA, keyB, `"api_key"`, `"api_key_hash"`, `"api_key_generation"`, `"api_key_ref"`, `"api_key_status"`, `"api_keys"`} {
 		if bytes.Contains(ordinary.Body, []byte(forbidden)) {
 			t.Fatalf("ordinary stats leaked %q: %s", forbidden, ordinary.Body)
 		}
@@ -134,12 +135,15 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 	revealedKeys := map[string]bool{}
 	for _, option := range revealed.APIKeys {
 		revealedKeys[option.Key] = true
+		if option.Ref == "" || option.Generation == 0 || option.Status != apiKeyStatusAvailable {
+			t.Fatalf("revealed option has incomplete identity/status: %+v", option)
+		}
 	}
 	if !revealedKeys[keyA] || !revealedKeys[keyB] {
 		t.Fatalf("revealed options = %+v", revealed.APIKeys)
 	}
 
-	filterQuery := url.Values{"range": {"24h"}, "api_key_hash": {hashA}}
+	filterQuery := url.Values{"range": {"24h"}, "api_key_ref": {refA}}
 	filteredStats := call(runtime.routes.resourceStatsPath, filterQuery, session)
 	var filtered StatsResponse
 	if filteredStats.StatusCode != http.StatusOK || json.Unmarshal(filteredStats.Body, &filtered) != nil || filtered.Summary.Requests != 2 || len(filtered.APIKeys) != 1 || filtered.APIKeys[0].Key != keyA {
@@ -151,7 +155,7 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 		t.Fatalf("filtered requests: status=%d body=%s", filteredRequests.StatusCode, filteredRequests.Body)
 	}
 	for _, item := range filteredPage.Items {
-		if item.APIKey != keyA || item.APIKeyHash != hashA {
+		if item.APIKey != keyA || item.APIKeyHash != hashA || item.APIKeyRef != refA || item.APIKeyStatus != apiKeyStatusAvailable {
 			t.Fatalf("filtered request was not revealed: %+v", item)
 		}
 	}
@@ -163,10 +167,14 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 
 	for _, path := range []string{runtime.routes.resourceStatsPath, runtime.routes.resourceRequestsPath, runtime.routes.resourceCostsPath} {
 		if response := call(path, filterQuery, ""); response.StatusCode != http.StatusForbidden {
-			t.Fatalf("unauthorized hash filter %s status = %d", path, response.StatusCode)
+			t.Fatalf("unauthorized ref filter %s status = %d", path, response.StatusCode)
 		}
-		if response := call(path, url.Values{"range": {"24h"}, "api_key_hash": {"INVALID"}}, session); response.StatusCode != http.StatusBadRequest {
-			t.Fatalf("invalid hash filter %s status = %d body=%s", path, response.StatusCode, response.Body)
+		if response := call(path, url.Values{"range": {"24h"}, "api_key_ref": {"INVALID"}}, session); response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("invalid ref filter %s status = %d body=%s", path, response.StatusCode, response.Body)
+		}
+		legacy := call(path, url.Values{"range": {"24h"}, "api_key_hash": {hashA}}, session)
+		if legacy.StatusCode != http.StatusOK {
+			t.Fatalf("legacy unique hash filter %s status = %d body=%s", path, legacy.StatusCode, legacy.Body)
 		}
 	}
 
@@ -200,7 +208,7 @@ func TestDisabledAPIKeyTrackingDropsAllKeyMaterial(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats, err := store.Query("24h")
-	if err != nil || len(stats.APIKeys) != 0 || len(stats.Groups) != 1 || stats.Groups[0].APIKey != "" || stats.Groups[0].APIKeyHash != "" {
+	if err != nil || len(stats.APIKeys) != 0 || len(stats.Groups) != 1 || stats.Groups[0].APIKey != "" || stats.Groups[0].APIKeyHash != "" || stats.Groups[0].APIKeyStatus != "" {
 		t.Fatalf("disabled tracking stats = %+v, %v", stats, err)
 	}
 	backup, err := store.Backup()
@@ -216,6 +224,151 @@ func TestDisabledAPIKeyTrackingDropsAllKeyMaterial(t *testing.T) {
 	response, err := runtime.handleManagement(raw)
 	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"api_key_tracking_enabled":false`) || !strings.Contains(string(response.Body), `"api_key_uses_default_secret":false`) {
 		t.Fatalf("disabled full-mode data = %+v, %v", response, err)
+	}
+}
+
+func TestEnabledTrackingMarksMissingHostAPIKeyWithoutExposingIdentity(t *testing.T) {
+	config := testConfig(t)
+	config.APIKeySecret = defaultAPIKeySecret
+	config.SyncOnRecord = true
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreWithCrypto(config, crypto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{
+		store:  store,
+		config: config,
+		crypto: crypto,
+		routes: registeredRoutes{pluginID: "test", resourceStatsPath: "/v0/resource/plugins/test/stats", resourceRequestsPath: "/v0/resource/plugins/test/requests"},
+	}
+	runtime.apiKeyGeneration, runtime.apiKeyGenerations = store.APIKeyCryptoState()
+	defer runtime.shutdown()
+
+	record, _ := json.Marshal(pluginapi.UsageRecord{Model: "missing-key-model", RequestedAt: time.Now().UTC(), Detail: pluginapi.UsageDetail{TotalTokens: 1}})
+	if _, err := runtime.handleUsage(record); err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(path, session string) pluginapi.ManagementResponse {
+		headers := http.Header{}
+		if session != "" {
+			headers.Set("X-Full-Mode-Session", session)
+		}
+		raw, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: path, Query: url.Values{"range": {"24h"}}, Headers: headers})
+		response, callErr := runtime.handleManagement(raw)
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		return response
+	}
+
+	fullStats := call(runtime.routes.resourceStatsPath, session)
+	var stats StatsResponse
+	if fullStats.StatusCode != http.StatusOK || json.Unmarshal(fullStats.Body, &stats) != nil || len(stats.Groups) != 1 {
+		t.Fatalf("full stats = %d %s", fullStats.StatusCode, fullStats.Body)
+	}
+	if stats.Groups[0].APIKeyStatus != apiKeyStatusSourceMissing || stats.Groups[0].APIKey != "" || stats.Groups[0].APIKeyRef != "" || len(stats.APIKeys) != 0 {
+		t.Fatalf("missing host key was not isolated: %+v", stats)
+	}
+	fullRequests := call(runtime.routes.resourceRequestsPath, session)
+	var page RequestPage
+	if fullRequests.StatusCode != http.StatusOK || json.Unmarshal(fullRequests.Body, &page) != nil || len(page.Items) != 1 || page.Items[0].APIKeyStatus != apiKeyStatusSourceMissing {
+		t.Fatalf("full requests = %d %s", fullRequests.StatusCode, fullRequests.Body)
+	}
+	ordinary := call(runtime.routes.resourceStatsPath, "")
+	for _, forbidden := range []string{`"api_key"`, `"api_key_hash"`, `"api_key_generation"`, `"api_key_ref"`, `"api_key_status"`, apiKeyStatusSourceMissing} {
+		if bytes.Contains(ordinary.Body, []byte(forbidden)) {
+			t.Fatalf("ordinary response leaked %q: %s", forbidden, ordinary.Body)
+		}
+	}
+}
+
+func TestLegacyAPIKeyHashFilterRejectsAmbiguousGenerations(t *testing.T) {
+	configA := testConfig(t)
+	configA.APIKeySecret = strings.Repeat("a", 32)
+	configA.SyncOnRecord = true
+	ctxA, err := deriveCryptoContext(configA.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreWithCrypto(configA, ctxA)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	sharedHash := apiKeyFingerprint("generation-a-key", ctxA.indexKey)
+	if err := store.Record(encryptedUsageForGeneration(t, ctxA, 1, "generation-a-key", "generation-a", 1)); err != nil {
+		t.Fatal(err)
+	}
+	configB := configA
+	configB.APIKeySecret = strings.Repeat("b", 32)
+	ctxB, err := deriveCryptoContext(configB.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconfigureWithCrypto(configB, ctxB); err != nil {
+		t.Fatal(err)
+	}
+	generationB, generations := store.APIKeyCryptoState()
+	ciphertextB, err := encryptAPIKeyForGeneration(ctxB, "generation-b-key", sharedHash, generationB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(normalizedUsage{
+		RequestedAt: time.Now().UTC(),
+		Dimensions: Dimensions{
+			Model:            "generation-b",
+			APIKey:           ciphertextB,
+			APIKeyHash:       sharedHash,
+			APIKeyGeneration: generationB,
+		},
+		Counters: Counters{Requests: 1, TotalTokens: 1},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	runtime := &pluginRuntime{
+		store:             store,
+		config:            configB,
+		crypto:            ctxB,
+		apiKeyGeneration:  generationB,
+		apiKeyGenerations: generations,
+		routes: registeredRoutes{
+			pluginID:          "test",
+			resourceStatsPath: "/v0/resource/plugins/test/stats",
+		},
+	}
+	session, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(query url.Values) pluginapi.ManagementResponse {
+		headers := http.Header{"X-Full-Mode-Session": []string{session}}
+		raw, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.resourceStatsPath, Query: query, Headers: headers})
+		response, callErr := runtime.handleManagement(raw)
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		return response
+	}
+
+	ambiguous := call(url.Values{"range": {"24h"}, "api_key_hash": {sharedHash}})
+	if ambiguous.StatusCode != http.StatusBadRequest || !strings.Contains(string(ambiguous.Body), "multiple crypto generations") {
+		t.Fatalf("ambiguous legacy filter = %d %s", ambiguous.StatusCode, ambiguous.Body)
+	}
+	refB := apiKeyRef(generationB, sharedHash)
+	filtered := call(url.Values{"range": {"24h"}, "api_key_ref": {refB}})
+	var stats StatsResponse
+	if filtered.StatusCode != http.StatusOK || json.Unmarshal(filtered.Body, &stats) != nil || stats.Summary.Requests != 1 || len(stats.Groups) != 1 || stats.Groups[0].APIKeyRef != refB {
+		t.Fatalf("generation-specific filter = %d %s", filtered.StatusCode, filtered.Body)
 	}
 }
 
@@ -244,6 +397,7 @@ func BenchmarkAPIKeyPersistenceFootprint(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+			generation, _ := store.APIKeyCryptoState()
 			now := time.Now().UTC().Truncate(time.Minute)
 			b.ResetTimer()
 			for index := 0; index < b.N; index++ {
@@ -254,12 +408,13 @@ func BenchmarkAPIKeyPersistenceFootprint(b *testing.B) {
 				}
 				if ctx.enabled {
 					hash := apiKeyFingerprint(test.key, ctx.indexKey)
-					ciphertext, err := encryptAPIKey(ctx, test.key, hash)
+					ciphertext, err := encryptAPIKeyForGeneration(ctx, test.key, hash, generation)
 					if err != nil {
 						b.Fatal(err)
 					}
 					usage.Dimensions.APIKey = ciphertext
 					usage.Dimensions.APIKeyHash = hash
+					usage.Dimensions.APIKeyGeneration = generation
 				}
 				if err := store.Record(usage); err != nil {
 					b.Fatal(err)

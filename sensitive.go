@@ -9,15 +9,21 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
 const (
-	apiKeyCipherVersion byte = 1
-	defaultAPIKeySecret      = "123456"
-	apiKeyHashVersion        = "hmac-sha256-128-v1"
+	apiKeyCipherVersionV1 byte = 1
+	apiKeyCipherVersionV2 byte = 2
+	apiKeyCipherVersion        = apiKeyCipherVersionV1
+	defaultAPIKeySecret        = "123456"
+	apiKeyHashVersion          = "hmac-sha256-128-v1"
 )
 
 type cryptoContext struct {
@@ -28,7 +34,24 @@ type cryptoContext struct {
 	usesDefaultSecret bool
 }
 
-type DecryptFunc func(ciphertext, fingerprint string) (string, error)
+type APIKeyCryptoGeneration struct {
+	ID              uint64    `json:"id"`
+	KeyID           string    `json:"key_id,omitempty"`
+	HashVersion     string    `json:"hash_version,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	IdentityMissing bool      `json:"identity_missing,omitempty"`
+}
+
+const (
+	apiKeyStatusAvailable             = "available"
+	apiKeyStatusGenerationUnavailable = "generation_unavailable"
+	apiKeyStatusCiphertextMissing     = "ciphertext_missing"
+	apiKeyStatusCiphertextInvalid     = "ciphertext_invalid"
+	apiKeyStatusIdentityMissing       = "identity_missing"
+	apiKeyStatusSourceMissing         = "source_missing"
+)
+
+type DecryptFunc func(ciphertext, fingerprint string, generation uint64) (string, string)
 
 type Sensitive interface {
 	Redact()
@@ -72,6 +95,17 @@ func apiKeyFingerprint(apiKey string, indexKey [32]byte) string {
 }
 
 func encryptAPIKey(ctx cryptoContext, plaintext, fingerprint string) (string, error) {
+	return encryptAPIKeyVersion(ctx, plaintext, fingerprint, 0, apiKeyCipherVersionV1)
+}
+
+func encryptAPIKeyForGeneration(ctx cryptoContext, plaintext, fingerprint string, generation uint64) (string, error) {
+	if generation == 0 {
+		return "", errors.New("api key generation is required")
+	}
+	return encryptAPIKeyVersion(ctx, plaintext, fingerprint, generation, apiKeyCipherVersionV2)
+}
+
+func encryptAPIKeyVersion(ctx cryptoContext, plaintext, fingerprint string, generation uint64, version byte) (string, error) {
 	if !ctx.enabled || plaintext == "" || fingerprint == "" {
 		return "", nil
 	}
@@ -87,16 +121,23 @@ func encryptAPIKey(ctx cryptoContext, plaintext, fingerprint string) (string, er
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", err
 	}
-	aad := []byte("api-key/v1:" + fingerprint)
+	aad, err := apiKeyAAD(version, generation, fingerprint)
+	if err != nil {
+		return "", err
+	}
 	sealed := gcm.Seal(nil, nonce, []byte(plaintext), aad)
 	combined := make([]byte, 1, 1+len(nonce)+len(sealed))
-	combined[0] = apiKeyCipherVersion
+	combined[0] = version
 	combined = append(combined, nonce...)
 	combined = append(combined, sealed...)
 	return base64.RawURLEncoding.EncodeToString(combined), nil
 }
 
 func decryptAPIKey(ctx cryptoContext, ciphertext, fingerprint string) (string, error) {
+	return decryptAPIKeyForGeneration(ctx, ciphertext, fingerprint, 0)
+}
+
+func decryptAPIKeyForGeneration(ctx cryptoContext, ciphertext, fingerprint string, generation uint64) (string, error) {
 	if !ctx.enabled || ciphertext == "" || fingerprint == "" {
 		return "", nil
 	}
@@ -104,9 +145,10 @@ func decryptAPIKey(ctx cryptoContext, ciphertext, fingerprint string) (string, e
 	if err != nil {
 		return "", err
 	}
-	if len(raw) < 1 || raw[0] != apiKeyCipherVersion {
+	if len(raw) < 1 {
 		return "", errors.New("unsupported api key ciphertext version")
 	}
+	version := raw[0]
 	raw = raw[1:]
 	block, err := aes.NewCipher(ctx.encKey[:])
 	if err != nil {
@@ -120,7 +162,10 @@ func decryptAPIKey(ctx cryptoContext, ciphertext, fingerprint string) (string, e
 	if len(raw) < nonceSize+gcm.Overhead() {
 		return "", errors.New("ciphertext too short")
 	}
-	aad := []byte("api-key/v1:" + fingerprint)
+	aad, err := apiKeyAAD(version, generation, fingerprint)
+	if err != nil {
+		return "", err
+	}
 	plaintext, err := gcm.Open(nil, raw[:nonceSize], raw[nonceSize:], aad)
 	if err != nil {
 		return "", err
@@ -128,10 +173,57 @@ func decryptAPIKey(ctx cryptoContext, ciphertext, fingerprint string) (string, e
 	return string(plaintext), nil
 }
 
-func (r *pluginRuntime) sensitiveJSONResponse(status int, value Sensitive, fullMode bool, crypto cryptoContext) pluginapi.ManagementResponse {
+func apiKeyAAD(version byte, generation uint64, fingerprint string) ([]byte, error) {
+	switch version {
+	case apiKeyCipherVersionV1:
+		return []byte("api-key/v1:" + fingerprint), nil
+	case apiKeyCipherVersionV2:
+		if generation == 0 {
+			return nil, errors.New("api key generation is required for ciphertext v2")
+		}
+		return []byte(fmt.Sprintf("api-key/v2:%d:%s", generation, fingerprint)), nil
+	default:
+		return nil, errors.New("unsupported api key ciphertext version")
+	}
+}
+
+func apiKeyRef(generation uint64, fingerprint string) string {
+	if generation == 0 || !validAPIKeyHash(fingerprint) {
+		return ""
+	}
+	return "g" + strconv.FormatUint(generation, 10) + ":" + fingerprint
+}
+
+func parseAPIKeyRef(ref string) (uint64, string, bool) {
+	prefix, hash, ok := strings.Cut(ref, ":")
+	if !ok || len(prefix) < 2 || prefix[0] != 'g' || !validAPIKeyHash(hash) {
+		return 0, "", false
+	}
+	generation, err := strconv.ParseUint(prefix[1:], 10, 64)
+	if err != nil || generation == 0 || apiKeyRef(generation, hash) != ref {
+		return 0, "", false
+	}
+	return generation, hash, true
+}
+
+func (r *pluginRuntime) sensitiveJSONResponse(status int, value Sensitive, fullMode bool, crypto cryptoContext, generations map[uint64]APIKeyCryptoGeneration) pluginapi.ManagementResponse {
 	if fullMode {
-		value.Reveal(func(ciphertext, fingerprint string) (string, error) {
-			return decryptAPIKey(crypto, ciphertext, fingerprint)
+		value.Reveal(func(ciphertext, fingerprint string, generation uint64) (string, string) {
+			metadata, ok := generations[generation]
+			if !ok || metadata.IdentityMissing || metadata.KeyID == "" {
+				return "", apiKeyStatusIdentityMissing
+			}
+			if !crypto.enabled || metadata.KeyID != crypto.keyID || metadata.HashVersion != apiKeyHashVersion {
+				return "", apiKeyStatusGenerationUnavailable
+			}
+			if ciphertext == "" {
+				return "", apiKeyStatusCiphertextMissing
+			}
+			plaintext, err := decryptAPIKeyForGeneration(crypto, ciphertext, fingerprint, generation)
+			if err != nil || plaintext == "" {
+				return "", apiKeyStatusCiphertextInvalid
+			}
+			return plaintext, apiKeyStatusAvailable
 		})
 	} else {
 		value.Redact()

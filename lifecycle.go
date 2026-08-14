@@ -36,20 +36,22 @@ type registrationCapabilities struct {
 }
 
 type pluginRuntime struct {
-	lifecycleMu      sync.Mutex
-	priceSyncMu      sync.Mutex
-	mu               sync.RWMutex
-	store            *Store
-	config           Config
-	crypto           cryptoContext
-	routes           registeredRoutes
-	modelsDevFetcher *modelsDevFetcher
-	exchangeRates    *exchangeRateService
-	authResolver     *authIdentityResolver
-	priceSyncing     bool
-	fullModeMu       sync.Mutex
-	fullModeSessions map[[32]byte]fullModeSession
-	fullModeUploads  map[string]fullModeUpload
+	lifecycleMu       sync.Mutex
+	priceSyncMu       sync.Mutex
+	mu                sync.RWMutex
+	store             *Store
+	config            Config
+	crypto            cryptoContext
+	apiKeyGeneration  uint64
+	apiKeyGenerations map[uint64]APIKeyCryptoGeneration
+	routes            registeredRoutes
+	modelsDevFetcher  *modelsDevFetcher
+	exchangeRates     *exchangeRateService
+	authResolver      *authIdentityResolver
+	priceSyncing      bool
+	fullModeMu        sync.Mutex
+	fullModeSessions  map[[32]byte]fullModeSession
+	fullModeUploads   map[string]fullModeUpload
 }
 
 var runtimeState = &pluginRuntime{}
@@ -111,8 +113,11 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 		if err := current.ReconfigureWithCrypto(config, crypto); err != nil {
 			return err
 		}
+		generation, generations := current.APIKeyCryptoState()
 		r.config = config
 		r.crypto = crypto
+		r.apiKeyGeneration = generation
+		r.apiKeyGenerations = generations
 		return nil
 	}
 
@@ -125,6 +130,7 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 	r.store = next
 	r.config = config
 	r.crypto = crypto
+	r.apiKeyGeneration, r.apiKeyGenerations = next.APIKeyCryptoState()
 	r.mu.Unlock()
 	r.fullModeMu.Lock()
 	r.fullModeSessions = nil
@@ -150,18 +156,32 @@ func (r *pluginRuntime) handleUsage(raw []byte) (map[string]any, error) {
 		return nil, withStatus(503, "plugin storage is not initialized")
 	}
 	crypto := r.crypto
+	generation := r.apiKeyGeneration
+	if generation == 0 && crypto.enabled {
+		generation, _ = r.store.APIKeyCryptoState()
+	}
 	plainKey := usage.Dimensions.APIKey
 	if plainKey != "" && crypto.enabled {
+		if generation == 0 {
+			return nil, errors.New("API key tracking has no active crypto generation")
+		}
 		fingerprint := apiKeyFingerprint(plainKey, crypto.indexKey)
-		ciphertext, err := encryptAPIKey(crypto, plainKey, fingerprint)
+		ciphertext, err := encryptAPIKeyForGeneration(crypto, plainKey, fingerprint, generation)
 		if err != nil {
 			return nil, fmt.Errorf("encrypt api key: %w", err)
 		}
 		usage.Dimensions.APIKeyHash = fingerprint
+		usage.Dimensions.APIKeyGeneration = generation
 		usage.Dimensions.APIKey = ciphertext
+		usage.Dimensions.APIKeyStatus = ""
 	} else {
 		usage.Dimensions.APIKey = ""
 		usage.Dimensions.APIKeyHash = ""
+		usage.Dimensions.APIKeyGeneration = 0
+		usage.Dimensions.APIKeyStatus = ""
+		if crypto.enabled {
+			usage.Dimensions.APIKeyStatus = apiKeyStatusSourceMissing
+		}
 	}
 	if err := r.store.Record(usage); err != nil {
 		return nil, err
@@ -178,6 +198,8 @@ func (r *pluginRuntime) shutdown() error {
 	r.store = nil
 	r.config = Config{}
 	r.crypto = cryptoContext{}
+	r.apiKeyGeneration = 0
+	r.apiKeyGenerations = nil
 	r.routes = registeredRoutes{}
 	r.exchangeRates = nil
 	r.authResolver = nil

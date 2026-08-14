@@ -22,6 +22,7 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 	}
 	key := "label-resource-test-key"
 	hash := apiKeyFingerprint(key, ctx.indexKey)
+	ref := apiKeyRef(1, hash)
 	if err := store.Record(encryptedUsageForTest(t, ctx, key, "label-model", 1)); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +56,7 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 		return response
 	}
 
-	validBody, _ := json.Marshal(map[string]string{"hash": hash, "label": "Primary client"})
+	validBody, _ := json.Marshal(map[string]string{"ref": ref, "label": "Primary client"})
 	if response := call(http.MethodPut, validBody, false); response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("unauthorized status = %d", response.StatusCode)
 	}
@@ -63,12 +64,12 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 		t.Fatalf("wrong method status = %d", response.StatusCode)
 	}
 	for name, body := range map[string][]byte{
-		"unknown field":  []byte(`{"hash":"` + hash + `","label":"x","extra":true}`),
-		"trailing JSON":  []byte(`{"hash":"` + hash + `","label":"x"}{}`),
-		"invalid hash":   []byte(`{"hash":"ABC","label":"x"}`),
-		"uppercase hash": []byte(`{"hash":"` + strings.ToUpper(hash) + `","label":"x"}`),
-		"too long":       []byte(`{"hash":"` + hash + `","label":"` + strings.Repeat("界", maxAPIKeyLabelRunes+1) + `"}`),
-		"invalid utf8":   append([]byte(`{"hash":"`+hash+`","label":"`), 0xff, '"', '}'),
+		"unknown field":  []byte(`{"ref":"` + ref + `","label":"x","extra":true}`),
+		"trailing JSON":  []byte(`{"ref":"` + ref + `","label":"x"}{}`),
+		"invalid ref":    []byte(`{"ref":"g0:ABC","label":"x"}`),
+		"uppercase hash": []byte(`{"ref":"g1:` + strings.ToUpper(hash) + `","label":"x"}`),
+		"too long":       []byte(`{"ref":"` + ref + `","label":"` + strings.Repeat("界", maxAPIKeyLabelRunes+1) + `"}`),
+		"invalid utf8":   append([]byte(`{"ref":"`+ref+`","label":"`), 0xff, '"', '}'),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if response := call(http.MethodPut, body, true); response.StatusCode != http.StatusBadRequest {
@@ -79,21 +80,21 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 	if response := call(http.MethodPut, make([]byte, (16<<10)+1), true); response.StatusCode != http.StatusRequestEntityTooLarge {
 		t.Fatalf("oversized body status = %d", response.StatusCode)
 	}
-	unknownBody, _ := json.Marshal(map[string]string{"hash": strings.Repeat("0", 32), "label": "unknown"})
+	unknownBody, _ := json.Marshal(map[string]string{"ref": apiKeyRef(1, strings.Repeat("0", 32)), "label": "unknown"})
 	if response := call(http.MethodPut, unknownBody, true); response.StatusCode != http.StatusNotFound {
-		t.Fatalf("unknown hash status = %d body=%s", response.StatusCode, response.Body)
+		t.Fatalf("unknown ref status = %d body=%s", response.StatusCode, response.Body)
 	}
 
 	if response := call(http.MethodPut, validBody, true); response.StatusCode != http.StatusOK {
 		t.Fatalf("save status = %d body=%s", response.StatusCode, response.Body)
 	}
 	labels, err := store.APIKeyLabels()
-	if err != nil || labels[hash] != "Primary client" {
+	if err != nil || labels[ref] != "Primary client" {
 		t.Fatalf("labels = %+v, %v", labels, err)
 	}
-	labels[hash] = "mutated by caller"
+	labels[ref] = "mutated by caller"
 	fresh, err := store.APIKeyLabels()
-	if err != nil || fresh[hash] != "Primary client" {
+	if err != nil || fresh[ref] != "Primary client" {
 		t.Fatalf("actor label map was not cloned: %+v, %v", fresh, err)
 	}
 
@@ -106,11 +107,11 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 	}
 	runtime.store = store
 	fresh, err = store.APIKeyLabels()
-	if err != nil || fresh[hash] != "Primary client" {
+	if err != nil || fresh[ref] != "Primary client" {
 		t.Fatalf("reloaded labels = %+v, %v", fresh, err)
 	}
 
-	deleteBody, _ := json.Marshal(map[string]string{"hash": hash, "label": ""})
+	deleteBody, _ := json.Marshal(map[string]string{"ref": ref, "label": ""})
 	if response := call(http.MethodPut, deleteBody, true); response.StatusCode != http.StatusOK {
 		t.Fatalf("delete status = %d body=%s", response.StatusCode, response.Body)
 	}

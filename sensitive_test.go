@@ -89,16 +89,20 @@ func TestSensitiveRevealDegradesOnlyCorruptItem(t *testing.T) {
 	badCiphertext, _ := encryptAPIKey(ctx, "bad-key", badHash)
 	stats := StatsResponse{
 		Groups: []GroupStats{
-			{Dimensions: Dimensions{APIKey: goodCiphertext, APIKeyHash: goodHash}},
-			{Dimensions: Dimensions{APIKey: badCiphertext, APIKeyHash: goodHash}},
+			{Dimensions: Dimensions{APIKey: goodCiphertext, APIKeyHash: goodHash, APIKeyGeneration: 1}},
+			{Dimensions: Dimensions{APIKey: badCiphertext, APIKeyHash: goodHash, APIKeyGeneration: 1}},
 		},
 		APIKeys: []APIKeyOption{
-			{Hash: goodHash, Key: goodCiphertext},
-			{Hash: badHash, Key: badCiphertext + "corrupt"},
+			{Ref: apiKeyRef(1, goodHash), Hash: goodHash, Generation: 1, Key: goodCiphertext},
+			{Ref: apiKeyRef(1, badHash), Hash: badHash, Generation: 1, Key: badCiphertext + "corrupt"},
 		},
 	}
-	stats.Reveal(func(ciphertext, fingerprint string) (string, error) {
-		return decryptAPIKey(ctx, ciphertext, fingerprint)
+	stats.Reveal(func(ciphertext, fingerprint string, generation uint64) (string, string) {
+		plaintext, err := decryptAPIKeyForGeneration(ctx, ciphertext, fingerprint, generation)
+		if err != nil {
+			return "", apiKeyStatusCiphertextInvalid
+		}
+		return plaintext, apiKeyStatusAvailable
 	})
 	if stats.Groups[0].APIKey != "good-key" || stats.APIKeys[0].Key != "good-key" {
 		t.Fatalf("valid ciphertext did not reveal: %+v", stats)

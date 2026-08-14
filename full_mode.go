@@ -251,13 +251,13 @@ func (r *pluginRuntime) setAPIKeyLabelResponse(request pluginapi.ManagementReque
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "API key label JSON must be valid UTF-8"}), nil
 	}
 	var input struct {
-		Hash  string `json:"hash"`
+		Ref   string `json:"ref"`
 		Label string `json:"label"`
 	}
 	if err := decodeStrictJSON(request.Body, &input); err != nil {
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid API key label JSON"}), nil
 	}
-	if err := validateAPIKeyLabel(input.Hash, input.Label); err != nil {
+	if err := validateAPIKeyLabel(input.Ref, input.Label); err != nil {
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": err.Error()}), nil
 	}
 	r.mu.RLock()
@@ -265,10 +265,10 @@ func (r *pluginRuntime) setAPIKeyLabelResponse(request pluginapi.ManagementReque
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "storage is not initialized"}), nil
 	}
-	if err := r.store.SetAPIKeyLabel(input.Hash, input.Label); err != nil {
+	if err := r.store.SetAPIKeyLabel(input.Ref, input.Label); err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]string{"error": err.Error()}), nil
 	}
-	return jsonResponse(http.StatusOK, map[string]any{"saved": true, "hash": input.Hash, "label": input.Label}), nil
+	return jsonResponse(http.StatusOK, map[string]any{"saved": true, "ref": input.Ref, "label": input.Label}), nil
 }
 
 func (r *pluginRuntime) revokeFullModeSessionResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {

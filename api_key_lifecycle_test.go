@@ -4,6 +4,7 @@ import (
 	"bytes"
 	cryptorand "crypto/rand"
 	"encoding/json"
+	"net/http"
 	"strings"
 	"sync"
 	"testing"
@@ -29,91 +30,112 @@ func (r *blockingNonceReader) Read(p []byte) (int, error) {
 }
 
 func encryptedUsageForTest(t *testing.T, ctx cryptoContext, key, model string, tokens uint64) normalizedUsage {
+	return encryptedUsageForGeneration(t, ctx, 1, key, model, tokens)
+}
+
+func encryptedUsageForGeneration(t *testing.T, ctx cryptoContext, generation uint64, key, model string, tokens uint64) normalizedUsage {
 	t.Helper()
 	hash := apiKeyFingerprint(key, ctx.indexKey)
-	ciphertext, err := encryptAPIKey(ctx, key, hash)
+	ciphertext, err := encryptAPIKeyForGeneration(ctx, key, hash, generation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return normalizedUsage{
 		RequestedAt: time.Now().UTC().Add(-time.Second),
-		Dimensions:  Dimensions{Model: model, Source: "test", APIKey: ciphertext, APIKeyHash: hash},
+		Dimensions:  Dimensions{Model: model, Source: "test", APIKey: ciphertext, APIKeyHash: hash, APIKeyGeneration: generation},
 		Counters:    Counters{Requests: 1, TotalTokens: tokens},
 	}
 }
 
-func TestAPIKeyCryptoIdentityRestartResetAndReconfigure(t *testing.T) {
+func revealStatsForCrypto(stats *StatsResponse, ctx cryptoContext, generations map[uint64]APIKeyCryptoGeneration) {
+	stats.Reveal(func(ciphertext, fingerprint string, generation uint64) (string, string) {
+		metadata, ok := generations[generation]
+		if !ok || metadata.IdentityMissing {
+			return "", apiKeyStatusIdentityMissing
+		}
+		if !ctx.enabled || metadata.KeyID != ctx.keyID {
+			return "", apiKeyStatusGenerationUnavailable
+		}
+		plaintext, err := decryptAPIKeyForGeneration(ctx, ciphertext, fingerprint, generation)
+		if err != nil {
+			return "", apiKeyStatusCiphertextInvalid
+		}
+		return plaintext, apiKeyStatusAvailable
+	})
+}
+
+func TestAPIKeyCryptoGenerationsRotateWithoutDataLoss(t *testing.T) {
 	config := testConfig(t)
 	config.APIKeySecret = strings.Repeat("a", 32)
 	config.SyncOnRecord = true
-	ctx, _ := deriveCryptoContext(config.APIKeySecret)
-	store, err := openStoreWithCrypto(config, ctx)
+	ctxA, _ := deriveCryptoContext(config.APIKeySecret)
+	store, err := openStoreWithCrypto(config, ctxA)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Record(encryptedUsageForTest(t, ctx, "identity-test-key", "original", 7)); err != nil {
+	if err := store.Record(encryptedUsageForGeneration(t, ctxA, 1, "identity-test-key", "original", 7)); err != nil {
 		t.Fatal(err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	db, err := bolt.Open(config.DataPath, 0o600, &bolt.Options{ReadOnly: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = db.View(func(tx *bolt.Tx) error {
-		meta := tx.Bucket(metaBucket)
-		if decodeUint64(meta.Get(schemaKey)) != persistenceSchemaVersion || string(meta.Get(cryptoKeyIDKey)) != ctx.keyID || string(meta.Get(apiKeyHashVersionKey)) != apiKeyHashVersion {
-			t.Fatalf("crypto metadata is incomplete")
-		}
-		return nil
-	})
-	if closeErr := db.Close(); err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	wrong := config
-	wrong.APIKeySecret = strings.Repeat("b", 32)
-	if candidate, err := openStore(wrong); err == nil {
-		candidate.Close()
-		t.Fatal("database opened with a different API-key secret")
-	}
-	disabled := config
-	disabled.APIKeySecret = ""
-	if candidate, err := openStore(disabled); err == nil {
-		candidate.Close()
-		t.Fatal("bound database opened with tracking disabled")
-	}
-
-	store, err = openStore(config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Reset(); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Reconfigure(wrong); err != nil {
-		t.Fatalf("reconfigure after reset: %v", err)
-	}
-	if err := store.Close(); err != nil {
-		t.Fatal(err)
-	}
-	store, err = openStore(wrong)
-	if err != nil {
-		t.Fatalf("reopen with replacement secret: %v", err)
 	}
 	defer store.Close()
+
+	configB := config
+	configB.APIKeySecret = strings.Repeat("b", 32)
+	ctxB, _ := deriveCryptoContext(configB.APIKeySecret)
+	if err := store.ReconfigureWithCrypto(configB, ctxB); err != nil {
+		t.Fatal(err)
+	}
+	generationB, generations := store.APIKeyCryptoState()
+	if generationB != 2 || len(generations) != 2 {
+		t.Fatalf("generation state = %d, %+v", generationB, generations)
+	}
+	if err := store.Record(encryptedUsageForGeneration(t, ctxB, generationB, "replacement-key", "replacement", 5)); err != nil {
+		t.Fatal(err)
+	}
 	stats, err := store.Query("24h")
-	if err != nil || stats.Summary.Requests != 0 || len(stats.APIKeys) != 0 {
-		t.Fatalf("reset state = %+v, %v", stats, err)
+	if err != nil || stats.Summary.TotalTokens != 12 || stats.Summary.Requests != 2 {
+		t.Fatalf("rotated stats = %+v, %v", stats, err)
+	}
+	revealStatsForCrypto(&stats, ctxB, generations)
+	statuses := map[uint64]string{}
+	for _, option := range stats.APIKeys {
+		statuses[option.Generation] = option.Status
+	}
+	if statuses[1] != apiKeyStatusGenerationUnavailable || statuses[2] != apiKeyStatusAvailable {
+		t.Fatalf("B reveal statuses = %+v", statuses)
+	}
+
+	if err := store.ReconfigureWithCrypto(config, ctxA); err != nil {
+		t.Fatal(err)
+	}
+	generationA, generations := store.APIKeyCryptoState()
+	if generationA != 1 || len(generations) != 2 {
+		t.Fatalf("reactivated generation = %d, %+v", generationA, generations)
+	}
+	stats, err = store.Query("24h")
+	if err != nil || stats.Summary.TotalTokens != 12 {
+		t.Fatalf("reactivated stats = %+v, %v", stats, err)
+	}
+	revealStatsForCrypto(&stats, ctxA, generations)
+	statuses = map[uint64]string{}
+	for _, option := range stats.APIKeys {
+		statuses[option.Generation] = option.Status
+	}
+	if statuses[1] != apiKeyStatusAvailable || statuses[2] != apiKeyStatusGenerationUnavailable {
+		t.Fatalf("A reveal statuses = %+v", statuses)
+	}
+
+	disabled := config
+	disabled.APIKeySecret = ""
+	if err := store.Reconfigure(disabled); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = store.Query("24h")
+	if err != nil || stats.Summary.TotalTokens != 12 {
+		t.Fatalf("disabled tracking lost data: %+v, %v", stats, err)
 	}
 }
 
-func TestRestoreRejectsDifferentCryptoIdentityWithoutChangingLiveStore(t *testing.T) {
+func TestRestoreAcceptsDifferentCryptoIdentityAndPreservesHistory(t *testing.T) {
 	configA := testConfig(t)
 	configA.APIKeySecret = strings.Repeat("a", 32)
 	configA.SyncOnRecord = true
@@ -146,15 +168,20 @@ func TestRestoreRejectsDifferentCryptoIdentityWithoutChangingLiveStore(t *testin
 		t.Fatal(err)
 	}
 	defer storeB.Close()
-	if err := storeB.Record(encryptedUsageForTest(t, ctxB, "live-api-key", "live", 5)); err != nil {
-		t.Fatal(err)
-	}
-	if err := storeB.RestoreBackup(backup); err == nil {
-		t.Fatal("restore accepted a different crypto identity")
+	if err := storeB.RestoreBackup(backup); err != nil {
+		t.Fatalf("restore rejected a different crypto identity: %v", err)
 	}
 	stats, err := storeB.Query("24h")
-	if err != nil || stats.Summary.TotalTokens != 5 || len(stats.Groups) != 1 || stats.Groups[0].Model != "live" {
-		t.Fatalf("live state changed after rejected restore: %+v, %v", stats, err)
+	if err != nil || stats.Summary.TotalTokens != 11 || len(stats.Groups) != 1 || stats.Groups[0].Model != "source" {
+		t.Fatalf("restored state = %+v, %v", stats, err)
+	}
+	generationB, generations := storeB.APIKeyCryptoState()
+	if generationB == 0 || len(generations) != 2 {
+		t.Fatalf("restored generations = %d, %+v", generationB, generations)
+	}
+	revealStatsForCrypto(&stats, ctxB, generations)
+	if len(stats.APIKeys) != 1 || stats.APIKeys[0].Status != apiKeyStatusGenerationUnavailable {
+		t.Fatalf("restored old key status = %+v", stats.APIKeys)
 	}
 }
 
@@ -180,21 +207,8 @@ func TestReconfigureCryptoIdentityRollsBackWithFailedCandidateFlush(t *testing.T
 	}
 	defer actor.db.Close()
 
-	now := time.Now().UTC()
-	if err := actor.flush(now, true); err != nil {
-		t.Fatal(err)
-	}
 	if err := actor.db.Update(func(tx *bolt.Tx) error {
-		hours := tx.Bucket(hoursBucket)
-		hour, err := hours.CreateBucketIfNotExists(encodeInt64(now.Truncate(time.Minute).Unix()))
-		if err != nil {
-			return err
-		}
-		counters, err := json.Marshal(Counters{Requests: 1})
-		if err != nil {
-			return err
-		}
-		return hour.Put([]byte("not-json"), counters)
+		return tx.DeleteBucket(metaBucket)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -211,14 +225,8 @@ func TestReconfigureCryptoIdentityRollsBackWithFailedCandidateFlush(t *testing.T
 	if actor.config.APIKeySecret != "" || actor.crypto.enabled {
 		t.Fatalf("actor retained failed candidate config: config=%q enabled=%v", actor.config.APIKeySecret, actor.crypto.enabled)
 	}
-	if err := actor.db.View(func(tx *bolt.Tx) error {
-		meta := tx.Bucket(metaBucket)
-		if len(meta.Get(cryptoKeyIDKey)) != 0 || len(meta.Get(apiKeyHashVersionKey)) != 0 {
-			t.Fatal("failed reconfigure persisted crypto identity")
-		}
-		return nil
-	}); err != nil {
-		t.Fatal(err)
+	if actor.activeGeneration != 0 || len(actor.generations) != 0 {
+		t.Fatalf("failed reconfigure changed generations: %d %+v", actor.activeGeneration, actor.generations)
 	}
 }
 
@@ -273,8 +281,15 @@ func TestSchemaSixDatabaseMigratesToCryptoIdentity(t *testing.T) {
 		if decodeUint64(meta.Get(schemaKey)) != persistenceSchemaVersion {
 			t.Fatalf("schema version = %d", decodeUint64(meta.Get(schemaKey)))
 		}
-		if string(meta.Get(cryptoKeyIDKey)) != ctx.keyID || string(meta.Get(apiKeyHashVersionKey)) != apiKeyHashVersion {
-			t.Fatal("schema-six migration did not bind the configured crypto identity")
+		generations, err := loadAPIKeyGenerations(meta)
+		if err != nil {
+			return err
+		}
+		if len(generations) != 1 || generations[1].KeyID != ctx.keyID || generations[1].HashVersion != apiKeyHashVersion {
+			t.Fatalf("schema-six generations = %+v", generations)
+		}
+		if len(meta.Get(cryptoKeyIDKey)) != 0 || len(meta.Get(apiKeyHashVersionKey)) != 0 {
+			t.Fatal("legacy crypto identity metadata was not removed")
 		}
 		return nil
 	}); err != nil {
@@ -282,7 +297,7 @@ func TestSchemaSixDatabaseMigratesToCryptoIdentity(t *testing.T) {
 	}
 }
 
-func TestMigrationRejectsAPIKeyDataWithoutCryptoIdentity(t *testing.T) {
+func TestMigrationPreservesAPIKeyDataWithoutCryptoIdentity(t *testing.T) {
 	config := testConfig(t)
 	config.APIKeySecret = defaultAPIKeySecret
 	db, err := bolt.Open(config.DataPath, 0o600, nil)
@@ -329,22 +344,189 @@ func TestMigrationRejectsAPIKeyDataWithoutCryptoIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if store, err := openStore(config); err == nil {
-		_ = store.Close()
-		t.Fatal("migration accepted API-key data without crypto identity")
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
 	}
-	db, err = bolt.Open(config.DataPath, 0o600, &bolt.Options{ReadOnly: true})
+	defer store.Close()
+	active, generations := store.APIKeyCryptoState()
+	if active != 2 || len(generations) != 2 || !generations[1].IdentityMissing {
+		t.Fatalf("migrated generations = active %d, %+v", active, generations)
+	}
+	stats, err := store.Query("24h")
+	if err != nil || stats.Summary.Requests != 1 || len(stats.APIKeys) != 1 || stats.APIKeys[0].Generation != 1 {
+		t.Fatalf("migrated stats = %+v, %v", stats, err)
+	}
+	ctx, _ := deriveCryptoContext(config.APIKeySecret)
+	revealStatsForCrypto(&stats, ctx, generations)
+	if stats.APIKeys[0].Status != apiKeyStatusIdentityMissing {
+		t.Fatalf("legacy status = %+v", stats.APIKeys[0])
+	}
+}
+
+func TestSchemaSevenMigrationMergesAggregatesAndPreservesSensitiveMetadata(t *testing.T) {
+	config := testConfig(t)
+	config.APIKeySecret = strings.Repeat("m", 32)
+	ctx, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainKey := "schema-seven-client-key"
+	hash := apiKeyFingerprint(plainKey, ctx.indexKey)
+	ciphertext, err := encryptAPIKey(ctx, plainKey, hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-time.Minute).Truncate(time.Minute)
+	request := RequestDetail{
+		Sequence: 1,
+		Time:     now,
+		Dimensions: Dimensions{
+			Model:      "legacy-model",
+			APIKey:     ciphertext,
+			APIKeyHash: hash,
+		},
+		Counters: Counters{Requests: 1, TotalTokens: 9},
+		Result:   "成功",
+	}
+	requestValue, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	labelsValue, err := json.Marshal(map[string]string{hash: "legacy label"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := bolt.Open(config.DataPath, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		meta, err := tx.CreateBucket(metaBucket)
+		if err != nil {
+			return err
+		}
+		for key, value := range map[string][]byte{
+			string(schemaKey):            encodeUint64(7),
+			string(sinceKey):             encodeInt64(now.UnixNano()),
+			string(requestSequenceKey):   encodeUint64(1),
+			string(cryptoKeyIDKey):       []byte(ctx.keyID),
+			string(apiKeyHashVersionKey): []byte(apiKeyHashVersion),
+			string(apiKeyLabelsKey):      labelsValue,
+		} {
+			if err := meta.Put([]byte(key), value); err != nil {
+				return err
+			}
+		}
+		hours, err := tx.CreateBucket(hoursBucket)
+		if err != nil {
+			return err
+		}
+		hour, err := hours.CreateBucket(encodeInt64(now.Unix()))
+		if err != nil {
+			return err
+		}
+		firstDimensions := []byte(`{"model":"legacy-model","api_key_hash":"` + hash + `"}`)
+		secondDimensions := []byte(`{"api_key_hash":"` + hash + `","model":"legacy-model"}`)
+		firstCounters, _ := json.Marshal(Counters{Requests: 2, InputTokens: 3, TotalTokens: 3})
+		secondCounters, _ := json.Marshal(Counters{Requests: 3, OutputTokens: 4, TotalTokens: 4})
+		if err := hour.Put(firstDimensions, firstCounters); err != nil {
+			return err
+		}
+		if err := hour.Put(secondDimensions, secondCounters); err != nil {
+			return err
+		}
+		requests, err := tx.CreateBucket(requestsBucket)
+		if err != nil {
+			return err
+		}
+		return requests.Put(encodeRequestKey(now.UnixNano(), 1), requestValue)
+	}); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := openStoreWithCrypto(config, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	active, generations := store.APIKeyCryptoState()
+	if active != 1 || len(generations) != 1 || generations[1].KeyID != ctx.keyID {
+		t.Fatalf("migrated crypto state = %d, %+v", active, generations)
+	}
+	stats, err := store.Query("24h")
+	if err != nil || stats.Summary.Requests != 5 || stats.Summary.InputTokens != 3 || stats.Summary.OutputTokens != 4 || stats.Summary.TotalTokens != 7 || len(stats.Groups) != 1 {
+		t.Fatalf("migrated aggregate stats = %+v, %v", stats, err)
+	}
+	revealStatsForCrypto(&stats, ctx, generations)
+	if len(stats.APIKeys) != 1 || stats.APIKeys[0].Ref != apiKeyRef(1, hash) || stats.APIKeys[0].Key != plainKey || stats.APIKeys[0].Status != apiKeyStatusAvailable {
+		t.Fatalf("migrated aggregate API key = %+v", stats.APIKeys)
+	}
+	page, err := store.QueryRequests("24h", 0, 10, "")
+	if err != nil || len(page.Items) != 1 || page.Items[0].APIKeyGeneration != 1 {
+		t.Fatalf("migrated requests = %+v, %v", page, err)
+	}
+	page.Reveal(func(ciphertext, fingerprint string, generation uint64) (string, string) {
+		plaintext, decryptErr := decryptAPIKeyForGeneration(ctx, ciphertext, fingerprint, generation)
+		if decryptErr != nil {
+			return "", apiKeyStatusCiphertextInvalid
+		}
+		return plaintext, apiKeyStatusAvailable
+	})
+	if page.Items[0].APIKey != plainKey || page.Items[0].APIKeyStatus != apiKeyStatusAvailable {
+		t.Fatalf("migrated v1 request ciphertext = %+v", page.Items[0])
+	}
+	labels, err := store.APIKeyLabels()
+	if err != nil || labels[apiKeyRef(1, hash)] != "legacy label" || len(labels) != 1 {
+		t.Fatalf("migrated labels = %+v, %v", labels, err)
+	}
+}
+
+func TestAPIKeyGenerationRegistryRejectsAmbiguousMetadata(t *testing.T) {
+	config := testConfig(t)
+	db, err := bolt.Open(config.DataPath, 0o600, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	if err := db.View(func(tx *bolt.Tx) error {
-		meta := tx.Bucket(metaBucket)
-		if decodeUint64(meta.Get(schemaKey)) != 6 {
-			t.Fatal("failed migration changed the schema version")
+	ctx, err := deriveCryptoContext(strings.Repeat("v", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		meta, err := tx.CreateBucket(metaBucket)
+		if err != nil {
+			return err
 		}
-		if len(meta.Get(cryptoKeyIDKey)) != 0 || len(meta.Get(apiKeyHashVersionKey)) != 0 {
-			t.Fatal("failed migration wrote crypto identity metadata")
+		duplicate, err := json.Marshal([]APIKeyCryptoGeneration{
+			{ID: 1, KeyID: ctx.keyID, HashVersion: apiKeyHashVersion},
+			{ID: 2, KeyID: ctx.keyID, HashVersion: apiKeyHashVersion},
+		})
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(apiKeyGenerationsKey, duplicate); err != nil {
+			return err
+		}
+		if _, err := loadAPIKeyGenerations(meta); err == nil || !strings.Contains(err.Error(), "duplicate identities") {
+			t.Fatalf("duplicate generation identity error = %v", err)
+		}
+		generations := map[uint64]APIKeyCryptoGeneration{
+			2: {ID: 2, KeyID: ctx.keyID, HashVersion: apiKeyHashVersion},
+		}
+		if err := meta.Put(apiKeyNextGenerationKey, encodeUint64(2)); err != nil {
+			return err
+		}
+		candidate, err := deriveCryptoContext(strings.Repeat("w", 32))
+		if err != nil {
+			return err
+		}
+		if _, _, err := activateAPIKeyGeneration(meta, generations, candidate, time.Now().UTC()); err == nil || !strings.Contains(err.Error(), "does not follow existing generation") {
+			t.Fatalf("regressed generation sequence error = %v", err)
 		}
 		return nil
 	}); err != nil {
@@ -352,7 +534,7 @@ func TestMigrationRejectsAPIKeyDataWithoutCryptoIdentity(t *testing.T) {
 	}
 }
 
-func TestOpenRejectsIncompleteCryptoIdentityMetadata(t *testing.T) {
+func TestOpenDegradesIncompleteCryptoIdentityMetadata(t *testing.T) {
 	config := testConfig(t)
 	config.APIKeySecret = defaultAPIKeySecret
 	ctx, err := deriveCryptoContext(config.APIKeySecret)
@@ -368,7 +550,7 @@ func TestOpenRejectsIncompleteCryptoIdentityMetadata(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		if err := meta.Put(schemaKey, encodeUint64(persistenceSchemaVersion)); err != nil {
+		if err := meta.Put(schemaKey, encodeUint64(7)); err != nil {
 			return err
 		}
 		if err := meta.Put(sinceKey, encodeInt64(time.Now().UTC().UnixNano())); err != nil {
@@ -388,13 +570,166 @@ func TestOpenRejectsIncompleteCryptoIdentityMetadata(t *testing.T) {
 	if err := db.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if store, err := openStoreWithCrypto(config, ctx); err == nil {
-		_ = store.Close()
-		t.Fatal("database opened with incomplete crypto identity metadata")
+	store, err := openStoreWithCrypto(config, ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	active, generations := store.APIKeyCryptoState()
+	if active != 2 || len(generations) != 2 || !generations[1].IdentityMissing {
+		t.Fatalf("incomplete identity generations = active %d, %+v", active, generations)
 	}
 }
 
-func TestConcurrentUsagePreventsResetWindowCryptoGenerationMix(t *testing.T) {
+func TestRestoreResponsePublishesActiveGenerationBeforeNextUsage(t *testing.T) {
+	sourceConfig := testConfig(t)
+	sourceConfig.APIKeySecret = strings.Repeat("r", 32)
+	sourceConfig.SyncOnRecord = true
+	sourceCrypto, err := deriveCryptoContext(sourceConfig.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourceStore, err := openStoreWithCrypto(sourceConfig, sourceCrypto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceStore.Record(encryptedUsageForGeneration(t, sourceCrypto, 1, "restore-old-key", "before-restore", 1)); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := sourceStore.Backup()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sourceStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	targetConfig := testConfig(t)
+	targetConfig.APIKeySecret = strings.Repeat("s", 32)
+	targetConfig.SyncOnRecord = true
+	targetCrypto, err := deriveCryptoContext(targetConfig.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetStore, err := openStoreWithCrypto(targetConfig, targetCrypto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: targetStore, config: targetConfig, crypto: targetCrypto}
+	runtime.apiKeyGeneration, runtime.apiKeyGenerations = targetStore.APIKeyCryptoState()
+	defer runtime.shutdown()
+
+	response, err := runtime.restoreResponse(pluginapi.ManagementRequest{
+		Method: http.MethodPost,
+		Headers: http.Header{
+			"Content-Type":      []string{"application/octet-stream"},
+			"X-Confirm-Restore": []string{"replace"},
+		},
+		Body: backup,
+	})
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("restore response = %+v, %v", response, err)
+	}
+	storeGeneration, generations := targetStore.APIKeyCryptoState()
+	runtime.mu.RLock()
+	runtimeGeneration := runtime.apiKeyGeneration
+	runtime.mu.RUnlock()
+	if storeGeneration == 0 || runtimeGeneration != storeGeneration || len(generations) != 2 {
+		t.Fatalf("post-restore generations = runtime %d, store %d, %+v", runtimeGeneration, storeGeneration, generations)
+	}
+	plainKey := "restore-new-key"
+	raw, _ := json.Marshal(pluginapi.UsageRecord{
+		Model:       "after-restore",
+		APIKey:      plainKey,
+		RequestedAt: time.Now().UTC(),
+		Detail:      pluginapi.UsageDetail{TotalTokens: 2},
+	})
+	if _, err := runtime.handleUsage(raw); err != nil {
+		t.Fatal(err)
+	}
+	page, err := targetStore.QueryRequests("24h", 0, 10, "after-restore")
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("post-restore request page = %+v, %v", page, err)
+	}
+	item := page.Items[0]
+	if item.APIKeyGeneration != storeGeneration {
+		t.Fatalf("post-restore request generation = %d, want %d", item.APIKeyGeneration, storeGeneration)
+	}
+	revealed, err := decryptAPIKeyForGeneration(targetCrypto, item.APIKey, item.APIKeyHash, item.APIKeyGeneration)
+	if err != nil || revealed != plainKey {
+		t.Fatalf("post-restore API key = %q, %v", revealed, err)
+	}
+}
+
+func TestResetResponsePublishesRecreatedGenerationBeforeNextUsage(t *testing.T) {
+	config := testConfig(t)
+	config.APIKeySecret = strings.Repeat("t", 32)
+	config.SyncOnRecord = true
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreWithCrypto(config, crypto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedConfig := config
+	rotatedConfig.APIKeySecret = strings.Repeat("u", 32)
+	rotatedCrypto, err := deriveCryptoContext(rotatedConfig.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReconfigureWithCrypto(rotatedConfig, rotatedCrypto); err != nil {
+		t.Fatal(err)
+	}
+	beforeReset, _ := store.APIKeyCryptoState()
+	if beforeReset != 2 {
+		t.Fatalf("pre-reset generation = %d, want 2", beforeReset)
+	}
+	runtime := &pluginRuntime{store: store, config: rotatedConfig, crypto: rotatedCrypto}
+	runtime.apiKeyGeneration, runtime.apiKeyGenerations = store.APIKeyCryptoState()
+	defer runtime.shutdown()
+
+	response, err := runtime.resetResponse(pluginapi.ManagementRequest{
+		Method:  http.MethodPost,
+		Headers: http.Header{"Content-Type": []string{"application/json"}},
+		Body:    []byte(`{"confirm":"reset"}`),
+	})
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("reset response = %+v, %v", response, err)
+	}
+	storeGeneration, generations := store.APIKeyCryptoState()
+	runtime.mu.RLock()
+	runtimeGeneration := runtime.apiKeyGeneration
+	runtime.mu.RUnlock()
+	if storeGeneration != 1 || runtimeGeneration != storeGeneration || len(generations) != 1 {
+		t.Fatalf("post-reset generations = runtime %d, store %d, %+v", runtimeGeneration, storeGeneration, generations)
+	}
+	plainKey := "reset-new-key"
+	raw, _ := json.Marshal(pluginapi.UsageRecord{
+		Model:       "after-reset",
+		APIKey:      plainKey,
+		RequestedAt: time.Now().UTC(),
+		Detail:      pluginapi.UsageDetail{TotalTokens: 3},
+	})
+	if _, err := runtime.handleUsage(raw); err != nil {
+		t.Fatal(err)
+	}
+	page, err := store.QueryRequests("24h", 0, 10, "after-reset")
+	if err != nil || len(page.Items) != 1 {
+		t.Fatalf("post-reset request page = %+v, %v", page, err)
+	}
+	item := page.Items[0]
+	if item.APIKeyGeneration != storeGeneration {
+		t.Fatalf("post-reset request generation = %d, want %d", item.APIKeyGeneration, storeGeneration)
+	}
+	revealed, err := decryptAPIKeyForGeneration(rotatedCrypto, item.APIKey, item.APIKeyHash, item.APIKeyGeneration)
+	if err != nil || revealed != plainKey {
+		t.Fatalf("post-reset API key = %q, %v", revealed, err)
+	}
+}
+
+func TestConcurrentUsageKeepsInFlightCryptoGeneration(t *testing.T) {
 	config := testConfig(t)
 	config.APIKeySecret = strings.Repeat("e", 32)
 	config.SyncOnRecord = true
@@ -442,15 +777,18 @@ func TestConcurrentUsagePreventsResetWindowCryptoGenerationMix(t *testing.T) {
 	if err := <-usageResult; err != nil {
 		t.Fatalf("usage failed: %v", err)
 	}
-	if err := <-reconfigureResult; err == nil {
-		t.Fatal("concurrent reconfigure replaced the crypto generation used by an in-flight usage request")
+	if err := <-reconfigureResult; err != nil {
+		t.Fatalf("concurrent reconfigure failed: %v", err)
 	}
 
 	page, err := store.QueryRequests("24h", 0, 10, "")
 	if err != nil || len(page.Items) != 1 {
 		t.Fatalf("request page = %+v, %v", page, err)
 	}
-	revealed, err := decryptAPIKey(ctx, page.Items[0].APIKey, page.Items[0].APIKeyHash)
+	if page.Items[0].APIKeyGeneration != 1 {
+		t.Fatalf("in-flight request generation = %d", page.Items[0].APIKeyGeneration)
+	}
+	revealed, err := decryptAPIKeyForGeneration(ctx, page.Items[0].APIKey, page.Items[0].APIKeyHash, page.Items[0].APIKeyGeneration)
 	if err != nil || revealed != plainKey {
 		t.Fatalf("persisted request was not encrypted with the active generation: %q, %v", revealed, err)
 	}
@@ -458,7 +796,7 @@ func TestConcurrentUsagePreventsResetWindowCryptoGenerationMix(t *testing.T) {
 	activeSecret := runtime.config.APIKeySecret
 	activeKeyID := runtime.crypto.keyID
 	runtime.mu.RUnlock()
-	if activeSecret != config.APIKeySecret || activeKeyID != ctx.keyID {
-		t.Fatal("failed concurrent reconfigure changed the runtime crypto generation")
+	if activeSecret != candidate.APIKeySecret || activeKeyID == ctx.keyID {
+		t.Fatal("successful concurrent reconfigure did not publish the replacement generation")
 	}
 }

@@ -9,62 +9,74 @@ import (
 )
 
 type Dimensions struct {
-	Provider        string `json:"provider"`
-	ExecutorType    string `json:"executor_type"`
-	Model           string `json:"model"`
-	Alias           string `json:"alias"`
-	Source          string `json:"source"`
-	AuthProvider    string `json:"auth_provider,omitempty"`
-	AuthAccount     string `json:"auth_account,omitempty"`
-	APIKey          string `json:"api_key,omitempty"`
-	APIKeyHash      string `json:"api_key_hash,omitempty"`
-	AuthType        string `json:"auth_type"`
-	ServiceTier     string `json:"service_tier"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	Failed          bool   `json:"failed"`
-	FailureStatus   int    `json:"failure_status"`
+	Provider         string `json:"provider"`
+	ExecutorType     string `json:"executor_type"`
+	Model            string `json:"model"`
+	Alias            string `json:"alias"`
+	Source           string `json:"source"`
+	AuthProvider     string `json:"auth_provider,omitempty"`
+	AuthAccount      string `json:"auth_account,omitempty"`
+	APIKey           string `json:"api_key,omitempty"`
+	APIKeyHash       string `json:"api_key_hash,omitempty"`
+	APIKeyGeneration uint64 `json:"api_key_generation,omitempty"`
+	APIKeyRef        string `json:"api_key_ref,omitempty"`
+	APIKeyStatus     string `json:"api_key_status,omitempty"`
+	AuthType         string `json:"auth_type"`
+	ServiceTier      string `json:"service_tier"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	Failed           bool   `json:"failed"`
+	FailureStatus    int    `json:"failure_status"`
 }
 
 // usageFilter scopes every analytics surface to the same persisted dimensions.
 // Empty fields intentionally mean no restriction, which preserves legacy callers.
 type usageFilter struct {
-	Source       string
-	AuthProvider string
-	AuthAccount  string
-	APIKeyHash   string
+	Source           string
+	AuthProvider     string
+	AuthAccount      string
+	APIKeyHash       string
+	APIKeyGeneration uint64
 }
 
-func newUsageFilter(source, authProvider, authAccount, apiKeyHash string) usageFilter {
-	return usageFilter{
+func newUsageFilter(source, authProvider, authAccount, apiKeyIdentity string) usageFilter {
+	filter := usageFilter{
 		Source:       normalizeDimension(source),
 		AuthProvider: normalizeDimension(authProvider),
 		AuthAccount:  normalizeDimension(authAccount),
-		APIKeyHash:   normalizeDimension(apiKeyHash),
 	}
+	if generation, hash, ok := parseAPIKeyRef(apiKeyIdentity); ok {
+		filter.APIKeyGeneration = generation
+		filter.APIKeyHash = hash
+	} else {
+		filter.APIKeyHash = normalizeDimension(apiKeyIdentity)
+	}
+	return filter
 }
 
 func (f usageFilter) matches(dimensions Dimensions) bool {
 	return (f.Source == "" || dimensions.Source == f.Source) &&
 		(f.AuthProvider == "" || dimensions.AuthProvider == f.AuthProvider) &&
 		(f.AuthAccount == "" || dimensions.AuthAccount == f.AuthAccount) &&
-		(f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash)
+		(f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash) &&
+		(f.APIKeyGeneration == 0 || dimensions.APIKeyGeneration == f.APIKeyGeneration)
 }
 
 func (d *Dimensions) Redact() {
 	d.APIKey = ""
 	d.APIKeyHash = ""
+	d.APIKeyGeneration = 0
+	d.APIKeyRef = ""
+	d.APIKeyStatus = ""
 }
 
 func (d *Dimensions) Reveal(decrypt DecryptFunc) {
-	if d.APIKey == "" || d.APIKeyHash == "" {
+	if d.APIKeyHash == "" || d.APIKeyGeneration == 0 {
 		return
 	}
-	plaintext, err := decrypt(d.APIKey, d.APIKeyHash)
-	if err != nil {
-		d.APIKey = ""
-		return
-	}
+	d.APIKeyRef = apiKeyRef(d.APIKeyGeneration, d.APIKeyHash)
+	plaintext, status := decrypt(d.APIKey, d.APIKeyHash, d.APIKeyGeneration)
 	d.APIKey = plaintext
+	d.APIKeyStatus = status
 }
 
 type Counters struct {
@@ -175,8 +187,11 @@ type StatsResponse struct {
 }
 
 type APIKeyOption struct {
-	Hash string `json:"hash"`
-	Key  string `json:"key,omitempty"`
+	Ref        string `json:"ref"`
+	Hash       string `json:"hash"`
+	Generation uint64 `json:"generation"`
+	Key        string `json:"key,omitempty"`
+	Status     string `json:"status,omitempty"`
 }
 
 func (s *StatsResponse) Redact() {
@@ -191,15 +206,9 @@ func (s *StatsResponse) Reveal(decrypt DecryptFunc) {
 		s.Groups[i].Dimensions.Reveal(decrypt)
 	}
 	for i := range s.APIKeys {
-		if s.APIKeys[i].Key == "" {
-			continue
-		}
-		plaintext, err := decrypt(s.APIKeys[i].Key, s.APIKeys[i].Hash)
-		if err != nil {
-			s.APIKeys[i].Key = ""
-			continue
-		}
+		plaintext, status := decrypt(s.APIKeys[i].Key, s.APIKeys[i].Hash, s.APIKeys[i].Generation)
 		s.APIKeys[i].Key = plaintext
+		s.APIKeys[i].Status = status
 	}
 }
 
@@ -237,7 +246,7 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 	summary := Counters{}
 	sources := make(map[string]struct{})
 	identities := make(map[usageIdentity]struct{})
-	apiKeyHashes := make(map[string]struct{})
+	apiKeyRefs := make(map[string]struct{})
 	for key, counters := range data {
 		bucketTime := time.Unix(key.Hour, 0).UTC()
 		if !queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start) {
@@ -256,8 +265,8 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		if !filter.matches(dimensions) {
 			continue
 		}
-		if dimensions.APIKeyHash != "" {
-			apiKeyHashes[dimensions.APIKeyHash] = struct{}{}
+		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+			apiKeyRefs[ref] = struct{}{}
 		}
 		group := groups[dimensions]
 		group.add(counters)
@@ -284,8 +293,8 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 
 	groupRows := make([]GroupStats, 0, len(groups))
 	for dimensions, counters := range groups {
-		if dimensions.APIKeyHash != "" {
-			dimensions.APIKey = apiKeyCiphertexts[dimensions.APIKeyHash]
+		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+			dimensions.APIKey = apiKeyCiphertexts[ref]
 		}
 		groupRows = append(groupRows, GroupStats{
 			Dimensions:       dimensions,
@@ -353,11 +362,12 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		}
 		return identityValues[i].Account < identityValues[j].Account
 	})
-	apiKeys := make([]APIKeyOption, 0, len(apiKeyHashes))
-	for hash := range apiKeyHashes {
-		apiKeys = append(apiKeys, APIKeyOption{Hash: hash, Key: apiKeyCiphertexts[hash]})
+	apiKeys := make([]APIKeyOption, 0, len(apiKeyRefs))
+	for ref := range apiKeyRefs {
+		generation, hash, _ := parseAPIKeyRef(ref)
+		apiKeys = append(apiKeys, APIKeyOption{Ref: ref, Hash: hash, Generation: generation, Key: apiKeyCiphertexts[ref]})
 	}
-	sort.Slice(apiKeys, func(i, j int) bool { return apiKeys[i].Hash < apiKeys[j].Hash })
+	sort.Slice(apiKeys, func(i, j int) bool { return apiKeys[i].Ref < apiKeys[j].Ref })
 
 	return StatsResponse{
 		SchemaVersion:  1,
@@ -441,6 +451,7 @@ func compareDimensions(left, right Dimensions) int {
 		cmp.Compare(left.Source, right.Source),
 		cmp.Compare(left.AuthProvider, right.AuthProvider),
 		cmp.Compare(left.AuthAccount, right.AuthAccount),
+		cmp.Compare(left.APIKeyGeneration, right.APIKeyGeneration),
 		cmp.Compare(left.APIKeyHash, right.APIKeyHash),
 		cmp.Compare(left.AuthType, right.AuthType),
 		cmp.Compare(left.ServiceTier, right.ServiceTier),

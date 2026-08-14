@@ -328,6 +328,11 @@
   "apiKey.deleteLabel": "Delete label",
   "apiKey.trackingDisabled": "API Key tracking is disabled.",
   "apiKey.plaintextUnavailable": "Plaintext unavailable",
+  "apiKey.generationUnavailable": "Plaintext unavailable",
+  "apiKey.ciphertextMissing": "Plaintext ciphertext was not saved",
+  "apiKey.ciphertextInvalid": "Ciphertext is damaged or does not match",
+  "apiKey.identityMissing": "Historical key identity is missing",
+  "apiKey.sourceMissing": "Client API Key was not provided",
   "apiKey.defaultSecretWarning": "The public default secret 123456 is active. Anyone who obtains the database or a backup can decrypt stored API Keys. Configure a custom secret of at least 32 bytes.",
   "apiKey.labelTooLong": "The label must be at most 120 characters.",
   "apiKey.saveFailed": "Failed to save the API Key label."

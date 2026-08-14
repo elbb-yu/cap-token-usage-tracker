@@ -328,6 +328,11 @@
   "apiKey.deleteLabel": "刪除備註",
   "apiKey.trackingDisabled": "API Key 追蹤未啟用。",
   "apiKey.plaintextUnavailable": "明文不可用",
+  "apiKey.generationUnavailable": "明文不可用",
+  "apiKey.ciphertextMissing": "未儲存明文密文",
+  "apiKey.ciphertextInvalid": "密文損壞或不相符",
+  "apiKey.identityMissing": "歷史密鑰資訊缺失",
+  "apiKey.sourceMissing": "未提供用戶端 API Key",
   "apiKey.defaultSecretWarning": "目前使用公開預設密鑰 123456。任何取得資料庫或備份的人都可以解密其中儲存的 API Key。請改用至少 32 位元組的自訂密鑰。",
   "apiKey.labelTooLong": "備註最多 120 個字元。",
   "apiKey.saveFailed": "儲存 API Key 備註失敗。"

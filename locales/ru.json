@@ -328,6 +328,11 @@
   "apiKey.deleteLabel": "Удалить метку",
   "apiKey.trackingDisabled": "Отслеживание API Key отключено.",
   "apiKey.plaintextUnavailable": "Открытый текст недоступен",
+  "apiKey.generationUnavailable": "Открытый текст недоступен",
+  "apiKey.ciphertextMissing": "Шифротекст открытого значения не сохранен",
+  "apiKey.ciphertextInvalid": "Шифротекст поврежден или не соответствует ключу",
+  "apiKey.identityMissing": "Идентификатор исторического ключа отсутствует",
+  "apiKey.sourceMissing": "Клиентский API Key не был предоставлен",
   "apiKey.defaultSecretWarning": "Используется общедоступный секрет по умолчанию 123456. Любой, кто получит базу данных или резервную копию, сможет расшифровать сохраненные API Key. Настройте собственный секрет длиной не менее 32 байт.",
   "apiKey.labelTooLong": "Метка должна содержать не более 120 символов.",
   "apiKey.saveFailed": "Не удалось сохранить метку API Key."

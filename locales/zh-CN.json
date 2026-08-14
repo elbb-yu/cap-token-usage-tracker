@@ -328,6 +328,11 @@
   "apiKey.deleteLabel": "删除备注",
   "apiKey.trackingDisabled": "API Key 追踪未启用。",
   "apiKey.plaintextUnavailable": "明文不可用",
+  "apiKey.generationUnavailable": "明文不可用",
+  "apiKey.ciphertextMissing": "未保存明文密文",
+  "apiKey.ciphertextInvalid": "密文损坏或不匹配",
+  "apiKey.identityMissing": "历史密钥信息缺失",
+  "apiKey.sourceMissing": "未提供客户端 API Key",
   "apiKey.defaultSecretWarning": "当前使用公开默认密钥 123456。任何获得数据库或备份的人都可以解密其中保存的 API Key。请改用至少 32 字节的自定义密钥。",
   "apiKey.labelTooLong": "备注最多 120 个字符。",
   "apiKey.saveFailed": "保存 API Key 备注失败。"

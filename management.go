@@ -307,33 +307,30 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 
 func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
 	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
-	apiKeyHash, err := apiKeyHashFromRequest(request, fullMode)
-	if err != nil {
-		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
-	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
 	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyHash))
+	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity))
 	if err != nil {
 		status := errorHTTPStatus(err)
 		return jsonResponse(status, map[string]any{"error": err.Error()}), nil
 	}
-	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto), nil
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
 }
 
 func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
 	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
-	apiKeyHash, err := apiKeyHashFromRequest(request, fullMode)
-	if err != nil {
-		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
-	}
 	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
@@ -351,19 +348,20 @@ func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (p
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyHash), request.Query.Get("result"))
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	return r.sensitiveJSONResponse(http.StatusOK, &page, fullMode, r.crypto), nil
+	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity), request.Query.Get("result"))
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &page, fullMode, r.crypto, generations), nil
 }
 
 func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
 	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
-	apiKeyHash, err := apiKeyHashFromRequest(request, fullMode)
-	if err != nil {
-		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
-	}
 	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
@@ -373,25 +371,40 @@ func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (plug
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyHash))
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	return r.sensitiveJSONResponse(http.StatusOK, &costs, fullMode, r.crypto), nil
+	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity))
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &costs, fullMode, r.crypto, generations), nil
 }
 
-func apiKeyHashFromRequest(request pluginapi.ManagementRequest, fullMode bool) (string, error) {
-	raw := request.Query.Get("api_key_hash")
-	if raw == "" {
+func apiKeyIdentityFromRequest(request pluginapi.ManagementRequest, fullMode bool, store *Store) (string, error) {
+	ref := request.Query.Get("api_key_ref")
+	hash := request.Query.Get("api_key_hash")
+	if ref == "" && hash == "" {
 		return "", nil
 	}
 	if !fullMode {
-		return "", withStatus(http.StatusForbidden, "api_key_hash filtering requires a full-mode session")
+		return "", withStatus(http.StatusForbidden, "API key filtering requires a full-mode session")
 	}
-	if !validAPIKeyHash(raw) {
+	if ref != "" && hash != "" {
+		return "", withStatus(http.StatusBadRequest, "api_key_ref and api_key_hash cannot be used together")
+	}
+	if ref != "" {
+		if _, _, ok := parseAPIKeyRef(ref); !ok {
+			return "", withStatus(http.StatusBadRequest, "api_key_ref is invalid")
+		}
+		return ref, nil
+	}
+	if !validAPIKeyHash(hash) {
 		return "", withStatus(http.StatusBadRequest, "api_key_hash must be 32 lowercase hexadecimal characters")
 	}
-	return raw, nil
+	return store.ResolveAPIKeyHash(hash)
 }
 
 func (r *pluginRuntime) exchangeRateResponse() (pluginapi.ManagementResponse, error) {
@@ -643,14 +656,21 @@ func (r *pluginRuntime) restoreResponse(request pluginapi.ManagementRequest) (pl
 	if len(request.Body) > maxDatabaseBackupBytes {
 		return jsonResponse(http.StatusRequestEntityTooLarge, map[string]any{"error": "backup body is too large"}), nil
 	}
-	r.mu.RLock()
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	store := r.store
-	r.mu.RUnlock()
 	if store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
 	if err := store.RestoreBackup(request.Body); err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	generation, generations := store.APIKeyCryptoState()
+	if r.store == store {
+		r.apiKeyGeneration = generation
+		r.apiKeyGenerations = generations
 	}
 	return jsonResponse(http.StatusOK, map[string]any{
 		"restored":    true,
@@ -669,13 +689,21 @@ func (r *pluginRuntime) resetResponse(request pluginapi.ManagementRequest) (plug
 	if err := json.Unmarshal(request.Body, &confirmation); err != nil || confirmation.Confirm != "reset" {
 		return jsonResponse(http.StatusBadRequest, map[string]any{"error": `body must be {"confirm":"reset"}`}), nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.store == nil {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	store := r.store
+	if store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	if err := r.store.Reset(); err != nil {
+	if err := store.Reset(); err != nil {
 		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
+	}
+	generation, generations := store.APIKeyCryptoState()
+	if r.store == store {
+		r.apiKeyGeneration = generation
+		r.apiKeyGenerations = generations
 	}
 	return jsonResponse(http.StatusOK, map[string]any{
 		"reset":    true,
