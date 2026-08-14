@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -40,6 +41,9 @@ type registeredRoutes struct {
 	fullModeBackupPath        string
 	fullModeRestorePath       string
 	resourceStatsPath         string
+	resourceStatsInitialPath  string
+	resourceStatsTrendPath    string
+	resourceStatsGroupsPath   string
 	resourceRequestsPath      string
 	resourceCostsPath         string
 	resourceExchangeRatePath  string
@@ -77,6 +81,9 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		fullModeBackupPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/backup",
 		fullModeRestorePath:       "/v0/resource/plugins/" + pluginID + "/full-mode/restore",
 		resourceStatsPath:         "/v0/resource/plugins/" + pluginID + "/stats",
+		resourceStatsInitialPath:  "/v0/resource/plugins/" + pluginID + "/stats/initial",
+		resourceStatsTrendPath:    "/v0/resource/plugins/" + pluginID + "/stats/trends",
+		resourceStatsGroupsPath:   "/v0/resource/plugins/" + pluginID + "/stats/groups",
 		resourceRequestsPath:      "/v0/resource/plugins/" + pluginID + "/requests",
 		resourceCostsPath:         "/v0/resource/plugins/" + pluginID + "/costs",
 		resourceExchangeRatePath:  "/v0/resource/plugins/" + pluginID + "/exchange-rate",
@@ -142,10 +149,10 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 			{Path: "/full-mode/prices/sync", Description: "Capability-protected model price synchronization."},
 			{Path: "/full-mode/backup", Description: "Capability-protected database backup download."},
 			{Path: "/full-mode/restore", Description: "Capability-protected database backup restore."},
-			{
-				Path:        "/stats",
-				Description: "Read-only token usage statistics for the plugin dashboard.",
-			},
+			{Path: "/stats", Description: "Read full token usage statistics for compatible clients."},
+			{Path: "/stats/initial", Description: "Read compact first-screen token usage statistics."},
+			{Path: "/stats/trends", Description: "Read downsampled per-model token trends."},
+			{Path: "/stats/groups", Description: "Read detailed dimension statistics."},
 			{
 				Path:        "/requests",
 				Description: "Read paginated per-request token usage details.",
@@ -259,6 +266,21 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.statsResponse(request)
+	case routes.resourceStatsInitialPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.initialStatsResponse(request)
+	case routes.resourceStatsTrendPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.statsTrendResponse(request)
+	case routes.resourceStatsGroupsPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.groupsStatsResponse(request)
 	case routes.resourceRequestsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
@@ -336,6 +358,189 @@ func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (plug
 	}
 	_, generations := r.store.APIKeyCryptoState()
 	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
+}
+
+func (r *pluginRuntime) statsFilter(request pluginapi.ManagementRequest, fullMode bool) (usageRange, usageFilter, error) {
+	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
+	if err != nil {
+		return usageRange{}, usageFilter{}, err
+	}
+	if r.store == nil {
+		return usageRange{}, usageFilter{}, withStatus(http.StatusServiceUnavailable, "storage is not initialized")
+	}
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	if err != nil {
+		return usageRange{}, usageFilter{}, err
+	}
+	return queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity), nil
+}
+
+func (r *pluginRuntime) initialStatsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	queryRange, filter, err := r.statsFilter(request, fullMode)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	stats, err := r.store.queryInitialStatsByFilter(queryRange, filter)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
+}
+
+func (r *pluginRuntime) statsTrendResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	queryRange, filter, err := r.statsFilter(request, fullMode)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	stats, err := r.store.queryStatsTrendByFilter(queryRange, filter)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	return jsonResponse(http.StatusOK, stats), nil
+}
+
+func (r *pluginRuntime) groupsStatsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	queryRange, filter, err := r.statsFilter(request, fullMode)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	filter.Model = normalizeDimension(request.Query.Get("model"))
+	excludedModels := make(map[string]struct{}, len(request.Query["exclude_model"]))
+	for _, model := range request.Query["exclude_model"] {
+		if model = normalizeDimension(model); model != "" {
+			excludedModels[model] = struct{}{}
+		}
+	}
+	stats, err := r.store.queryGroupsByFilter(queryRange, filter)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	if len(excludedModels) > 0 {
+		items := stats.Items[:0]
+		for _, item := range stats.Items {
+			if _, excluded := excludedModels[compactModelName(item.Model)]; !excluded {
+				items = append(items, item)
+			}
+		}
+		stats.Items = items
+		stats.Total = len(items)
+	}
+	if err := sortGroupStats(stats.Items, request.Query.Get("sort"), request.Query.Get("direction")); err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	offset, err := parseNonNegativeQueryInt(request.Query.Get("offset"), 0, "offset")
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	limit, err := parseNonNegativeQueryInt(request.Query.Get("limit"), defaultRequestPageSize, "limit")
+	if err != nil || limit < 1 || limit > maxDashboardPageSize {
+		return jsonResponse(http.StatusBadRequest, map[string]any{"error": "limit must be an integer between 1 and 500"}), nil
+	}
+	if offset > stats.Total {
+		offset = stats.Total
+	}
+	end := offset + limit
+	if end > stats.Total {
+		end = stats.Total
+	}
+	stats.Items = stats.Items[offset:end]
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
+}
+
+func sortGroupStats(items []GroupStats, sortKey, direction string) error {
+	if sortKey == "" {
+		sortKey = "total_tokens"
+	}
+	if direction == "" {
+		direction = "desc"
+	}
+	if direction != "asc" && direction != "desc" {
+		return withStatus(http.StatusBadRequest, "direction must be asc or desc")
+	}
+	numeric := map[string]bool{"requests": true, "failed_requests": true, "input_tokens": true, "output_tokens": true, "reasoning_tokens": true, "cache_read_tokens": true, "cache_creation_tokens": true, "total_tokens": true, "average_latency_ns": true, "average_ttft_ns": true}
+	text := map[string]bool{"model": true, "provider": true, "auth_identity": true, "api_key": true, "alias": true, "source": true, "executor_type": true, "auth_type": true, "service_tier": true, "reasoning_effort": true}
+	if !numeric[sortKey] && !text[sortKey] {
+		return withStatus(http.StatusBadRequest, "unsupported group sort %q", sortKey)
+	}
+	value := func(item GroupStats) string {
+		switch sortKey {
+		case "model":
+			return compactModelName(item.Model)
+		case "provider":
+			return item.Provider
+		case "auth_identity":
+			return item.AuthProvider + "-" + item.AuthAccount
+		case "api_key":
+			return item.APIKeyHash
+		case "alias":
+			return item.Alias
+		case "source":
+			return item.Source
+		case "executor_type":
+			return item.ExecutorType
+		case "auth_type":
+			return item.AuthType
+		case "service_tier":
+			return item.ServiceTier
+		case "reasoning_effort":
+			return item.ReasoningEffort
+		default:
+			return ""
+		}
+	}
+	number := func(item GroupStats) uint64 {
+		switch sortKey {
+		case "requests":
+			return item.Requests
+		case "failed_requests":
+			return item.FailedRequests
+		case "input_tokens":
+			return item.InputTokens
+		case "output_tokens":
+			return item.OutputTokens
+		case "reasoning_tokens":
+			return item.ReasoningTokens
+		case "cache_read_tokens":
+			return item.CacheReadTokens
+		case "cache_creation_tokens":
+			return item.CacheCreationTokens
+		case "total_tokens":
+			return item.TotalTokens
+		case "average_latency_ns":
+			return item.AverageLatencyNS
+		case "average_ttft_ns":
+			return item.AverageTTFTNS
+		default:
+			return 0
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		var less bool
+		if numeric[sortKey] {
+			less = number(items[i]) < number(items[j])
+		} else {
+			less = value(items[i]) < value(items[j])
+		}
+		if numeric[sortKey] && number(items[i]) == number(items[j]) || !numeric[sortKey] && value(items[i]) == value(items[j]) {
+			return compareDimensions(items[i].Dimensions, items[j].Dimensions) < 0
+		}
+		if direction == "desc" {
+			return !less
+		}
+		return less
+	})
+	return nil
 }
 
 func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {

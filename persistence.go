@@ -49,15 +49,28 @@ type recordCommand struct {
 	resp  chan error
 }
 
+type statsQueryMode uint8
+
+const (
+	statsQueryFull statsQueryMode = iota
+	statsQueryInitial
+	statsQueryTrend
+	statsQueryGroups
+)
+
 type queryCommand struct {
 	queryRange usageRange
 	filter     usageFilter
+	mode       statsQueryMode
 	resp       chan queryResult
 }
 
 type queryResult struct {
-	stats StatsResponse
-	err   error
+	stats   StatsResponse
+	initial InitialStatsResponse
+	trend   StatsTrendResponse
+	groups  GroupStatsPage
+	err     error
 }
 
 type requestQueryCommand struct {
@@ -315,6 +328,33 @@ func (s *Store) queryStatsByFilter(queryRange usageRange, filter usageFilter) (S
 	}
 	result := <-resp
 	return result.stats, result.err
+}
+
+func (s *Store) queryInitialStatsByFilter(queryRange usageRange, filter usageFilter) (InitialStatsResponse, error) {
+	resp := make(chan queryResult, 1)
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, mode: statsQueryInitial, resp: resp}); err != nil {
+		return InitialStatsResponse{}, err
+	}
+	result := <-resp
+	return result.initial, result.err
+}
+
+func (s *Store) queryStatsTrendByFilter(queryRange usageRange, filter usageFilter) (StatsTrendResponse, error) {
+	resp := make(chan queryResult, 1)
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, mode: statsQueryTrend, resp: resp}); err != nil {
+		return StatsTrendResponse{}, err
+	}
+	result := <-resp
+	return result.trend, result.err
+}
+
+func (s *Store) queryGroupsByFilter(queryRange usageRange, filter usageFilter) (GroupStatsPage, error) {
+	resp := make(chan queryResult, 1)
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, mode: statsQueryGroups, resp: resp}); err != nil {
+		return GroupStatsPage{}, err
+	}
+	result := <-resp
+	return result.groups, result.err
 }
 
 func (s *Store) QueryRequests(rangeName string, offset, limit int, model string) (RequestPage, error) {
@@ -597,7 +637,20 @@ func (s *Store) run(actor *storeActor) {
 						continue
 					}
 					stats, err := actor.queryExactStats(item.queryRange, item.filter, now)
-					item.resp <- queryResult{stats: stats, err: err}
+					if err != nil {
+						item.resp <- queryResult{err: err}
+						continue
+					}
+					switch item.mode {
+					case statsQueryInitial:
+						item.resp <- queryResult{initial: initialStatsFromFull(stats, item.queryRange)}
+					case statsQueryTrend:
+						item.resp <- queryResult{trend: trendStatsFromFull(stats, item.queryRange)}
+					case statsQueryGroups:
+						item.resp <- queryResult{groups: GroupStatsPage{SchemaVersion: 2, GeneratedAt: stats.GeneratedAt, Range: stats.Range, Items: stats.Groups, Total: len(stats.Groups)}}
+					default:
+						item.resp <- queryResult{stats: stats}
+					}
 					continue
 				}
 				if err := actor.retryFailedFlush(now); err != nil {
@@ -608,8 +661,17 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- queryResult{err: withStatus(400, "%v", err)}
 					continue
 				}
-				stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)
-				item.resp <- queryResult{stats: stats}
+				switch item.mode {
+				case statsQueryInitial:
+					item.resp <- queryResult{initial: buildInitialStatsForRange(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)}
+				case statsQueryTrend:
+					item.resp <- queryResult{trend: buildStatsTrendForRange(actor.data, actor.since, item.queryRange, item.filter, now)}
+				case statsQueryGroups:
+					item.resp <- queryResult{groups: buildGroupsForRange(actor.data, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)}
+				default:
+					stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)
+					item.resp <- queryResult{stats: stats}
+				}
 			case requestQueryCommand:
 				now := time.Now().UTC()
 				if err := actor.flush(now, true); err != nil {

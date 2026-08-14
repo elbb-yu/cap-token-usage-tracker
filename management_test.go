@@ -34,20 +34,92 @@ func TestManagementRegistrationUsesDynamicPluginID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(registration.Routes) != 7 || registration.Routes[0].Method != http.MethodPost || registration.Routes[0].Path != "/plugins/custom-id/full-mode/session" || registration.Routes[1].Path != "/plugins/custom-id/stats" || registration.Routes[3].Method != http.MethodPut || registration.Routes[3].Path != "/plugins/custom-id/prices" || registration.Routes[4].Path != "/plugins/custom-id/prices/sync" || registration.Routes[5].Method != http.MethodGet || registration.Routes[5].Path != "/plugins/custom-id/backup" || registration.Routes[6].Method != http.MethodPost || registration.Routes[6].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 16 {
+	if len(registration.Routes) != 7 || registration.Routes[0].Method != http.MethodPost || registration.Routes[0].Path != "/plugins/custom-id/full-mode/session" || registration.Routes[1].Path != "/plugins/custom-id/stats" || registration.Routes[3].Method != http.MethodPut || registration.Routes[3].Path != "/plugins/custom-id/prices" || registration.Routes[4].Path != "/plugins/custom-id/prices/sync" || registration.Routes[5].Method != http.MethodGet || registration.Routes[5].Path != "/plugins/custom-id/backup" || registration.Routes[6].Method != http.MethodPost || registration.Routes[6].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 19 {
 		t.Fatalf("unexpected registration: %+v", registration)
 	}
 	resourcePaths := make(map[string]bool, len(registration.Resources))
 	for _, resource := range registration.Resources {
 		resourcePaths[resource.Path] = true
 	}
-	for _, path := range []string{"/dashboard", "/full-dashboard", "/full-mode/data", "/full-mode/api-key-labels", "/full-mode/session/revoke", "/full-mode/prices", "/full-mode/prices/save", "/full-mode/prices/sync", "/full-mode/backup", "/full-mode/restore", "/stats", "/requests", "/costs", "/exchange-rate", "/prices", "/preferences"} {
+	for _, path := range []string{"/dashboard", "/full-dashboard", "/full-mode/data", "/full-mode/api-key-labels", "/full-mode/session/revoke", "/full-mode/prices", "/full-mode/prices/save", "/full-mode/prices/sync", "/full-mode/backup", "/full-mode/restore", "/stats", "/stats/initial", "/stats/trends", "/stats/groups", "/requests", "/costs", "/exchange-rate", "/prices", "/preferences"} {
 		if !resourcePaths[path] {
 			t.Fatalf("registration missing resource %q: %+v", path, registration.Resources)
 		}
 	}
 	if registration.Routes[0].Menu != "" {
 		t.Fatal("authenticated stats route must not declare a legacy menu")
+	}
+}
+
+func TestCompactStatsResourcesShapePagingAndMethods(t *testing.T) {
+	config := testConfig(t)
+	config.SyncOnRecord = true
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config}
+	defer runtime.shutdown()
+	registration, err := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.registerManagement(registration); err != nil {
+		t.Fatal(err)
+	}
+	now := nowUTC().Truncate(5 * time.Minute)
+	for _, usage := range []normalizedUsage{
+		{Dimensions: Dimensions{Provider: "openai", Model: "alpha", Source: "cli"}, RequestedAt: now.Add(-4 * time.Minute), Counters: Counters{Requests: 2, TotalTokens: 20}},
+		{Dimensions: Dimensions{Provider: "anthropic", Model: "beta", Source: "cli"}, RequestedAt: now.Add(-3 * time.Minute), Counters: Counters{Requests: 1, TotalTokens: 10}},
+		{Dimensions: Dimensions{Provider: "openai", Model: "alpha", Source: "web"}, RequestedAt: now.Add(-2 * time.Minute), Counters: Counters{Requests: 3, TotalTokens: 30}},
+	} {
+		if err := store.Record(usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+	call := func(method, path string, query url.Values) pluginapi.ManagementResponse {
+		t.Helper()
+		raw, err := json.Marshal(pluginapi.ManagementRequest{Method: method, Path: path, Query: query})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := runtime.handleManagement(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	query := url.Values{"range": {"24h"}}
+	initialResponse := call(http.MethodGet, runtime.routes.resourceStatsInitialPath, query)
+	if initialResponse.StatusCode != http.StatusOK || strings.Contains(string(initialResponse.Body), `"groups"`) || strings.Contains(string(initialResponse.Body), `"model_series"`) {
+		t.Fatalf("initial response = %+v", initialResponse)
+	}
+	var initial InitialStatsResponse
+	if err := json.Unmarshal(initialResponse.Body, &initial); err != nil || initial.SchemaVersion != 2 || initial.BucketSeconds != 300 || initial.Summary.TotalTokens != 60 || len(initial.Models) != 2 || len(initial.Series) != 1 {
+		t.Fatalf("initial payload = %+v, %v", initial, err)
+	}
+	trendResponse := call(http.MethodGet, runtime.routes.resourceStatsTrendPath, query)
+	var trend StatsTrendResponse
+	if trendResponse.StatusCode != http.StatusOK || json.Unmarshal(trendResponse.Body, &trend) != nil || trend.BucketSeconds != 300 || len(trend.ModelSeries) != 2 {
+		t.Fatalf("trend response = %+v, payload=%+v", trendResponse, trend)
+	}
+	groupQuery := url.Values{"range": {"24h"}, "offset": {"0"}, "limit": {"1"}, "sort": {"model"}, "direction": {"asc"}}
+	groupsResponse := call(http.MethodGet, runtime.routes.resourceStatsGroupsPath, groupQuery)
+	var groups GroupStatsPage
+	if groupsResponse.StatusCode != http.StatusOK || json.Unmarshal(groupsResponse.Body, &groups) != nil || groups.Total != 3 || len(groups.Items) != 1 || groups.Items[0].Model != "alpha" {
+		t.Fatalf("groups response = %+v, payload=%+v", groupsResponse, groups)
+	}
+	groupQuery.Set("model", "alpha")
+	groupQuery.Set("exclude_model", "alpha")
+	groupsResponse = call(http.MethodGet, runtime.routes.resourceStatsGroupsPath, groupQuery)
+	if groupsResponse.StatusCode != http.StatusOK || json.Unmarshal(groupsResponse.Body, &groups) != nil || groups.Total != 0 || len(groups.Items) != 0 {
+		t.Fatalf("filtered groups response = %+v, payload=%+v", groupsResponse, groups)
+	}
+	for _, path := range []string{runtime.routes.resourceStatsInitialPath, runtime.routes.resourceStatsTrendPath, runtime.routes.resourceStatsGroupsPath} {
+		response := call(http.MethodPost, path, nil)
+		if response.StatusCode != http.StatusMethodNotAllowed || response.Headers.Get("Allow") != http.MethodGet {
+			t.Fatalf("method restriction for %s = %+v", path, response)
+		}
 	}
 }
 

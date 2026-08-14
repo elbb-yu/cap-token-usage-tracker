@@ -31,11 +31,14 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 		config: config,
 		crypto: crypto,
 		routes: registeredRoutes{
-			pluginID:             "test",
-			resourceStatsPath:    "/v0/resource/plugins/test/stats",
-			resourceRequestsPath: "/v0/resource/plugins/test/requests",
-			resourceCostsPath:    "/v0/resource/plugins/test/costs",
-			fullModeDataPath:     "/v0/resource/plugins/test/full-mode/data",
+			pluginID:                 "test",
+			resourceStatsPath:        "/v0/resource/plugins/test/stats",
+			resourceStatsInitialPath: "/v0/resource/plugins/test/stats/initial",
+			resourceStatsTrendPath:   "/v0/resource/plugins/test/stats/trends",
+			resourceStatsGroupsPath:  "/v0/resource/plugins/test/stats/groups",
+			resourceRequestsPath:     "/v0/resource/plugins/test/requests",
+			resourceCostsPath:        "/v0/resource/plugins/test/costs",
+			fullModeDataPath:         "/v0/resource/plugins/test/full-mode/data",
 		},
 	}
 	defer runtime.shutdown()
@@ -117,6 +120,23 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 		}
 	}
 
+	for _, path := range []string{runtime.routes.resourceStatsInitialPath, runtime.routes.resourceStatsTrendPath, runtime.routes.resourceStatsGroupsPath} {
+		query := url.Values{"range": {"24h"}}
+		if path == runtime.routes.resourceStatsGroupsPath {
+			query.Set("offset", "0")
+			query.Set("limit", "100")
+		}
+		response := call(path, query, "")
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("ordinary compact stats %s: %+v", path, response)
+		}
+		for _, forbidden := range []string{keyA, keyB, `"api_key"`, `"api_key_hash"`, `"api_key_generation"`, `"api_key_ref"`, `"api_key_status"`, `"api_keys"`} {
+			if bytes.Contains(response.Body, []byte(forbidden)) {
+				t.Fatalf("ordinary compact stats %s leaked %q: %s", path, forbidden, response.Body)
+			}
+		}
+	}
+
 	session, err := runtime.createFullModeSession()
 	if err != nil {
 		t.Fatal(err)
@@ -124,6 +144,16 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 	full := call(runtime.routes.resourceStatsPath, url.Values{"range": {"24h"}}, session)
 	if full.StatusCode != http.StatusOK {
 		t.Fatalf("full stats: %+v", full)
+	}
+	fullInitial := call(runtime.routes.resourceStatsInitialPath, url.Values{"range": {"24h"}}, session)
+	var revealedInitial InitialStatsResponse
+	if fullInitial.StatusCode != http.StatusOK || json.Unmarshal(fullInitial.Body, &revealedInitial) != nil || len(revealedInitial.APIKeys) != 2 || revealedInitial.APIKeys[0].Key == "" {
+		t.Fatalf("full initial stats: status=%d body=%s", fullInitial.StatusCode, fullInitial.Body)
+	}
+	fullGroups := call(runtime.routes.resourceStatsGroupsPath, url.Values{"range": {"24h"}, "offset": {"0"}, "limit": {"100"}}, session)
+	var revealedGroups GroupStatsPage
+	if fullGroups.StatusCode != http.StatusOK || json.Unmarshal(fullGroups.Body, &revealedGroups) != nil || len(revealedGroups.Items) != 2 || revealedGroups.Items[0].APIKeyRef == "" || revealedGroups.Items[0].APIKey == "" {
+		t.Fatalf("full groups stats: status=%d body=%s", fullGroups.StatusCode, fullGroups.Body)
 	}
 	var revealed StatsResponse
 	if err := json.Unmarshal(full.Body, &revealed); err != nil {
@@ -165,7 +195,7 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 		t.Fatalf("filtered costs: status=%d body=%s", filteredCosts.StatusCode, filteredCosts.Body)
 	}
 
-	for _, path := range []string{runtime.routes.resourceStatsPath, runtime.routes.resourceRequestsPath, runtime.routes.resourceCostsPath} {
+	for _, path := range []string{runtime.routes.resourceStatsPath, runtime.routes.resourceStatsInitialPath, runtime.routes.resourceStatsTrendPath, runtime.routes.resourceStatsGroupsPath, runtime.routes.resourceRequestsPath, runtime.routes.resourceCostsPath} {
 		if response := call(path, filterQuery, ""); response.StatusCode != http.StatusForbidden {
 			t.Fatalf("unauthorized ref filter %s status = %d", path, response.StatusCode)
 		}
