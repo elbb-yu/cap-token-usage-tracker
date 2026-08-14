@@ -40,6 +40,8 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 
 普通模式可以查看当前项目已有的非敏感统计数据，包括概览、趋势、费用估算、维度统计和逐请求元数据。它保留筛选、时间范围、刷新、表格分页、排序和列设置等日常查看功能。
 
+仪表盘会优先请求紧凑的首屏统计并立即渲染摘要、模型汇总和聚合趋势；逐模型趋势、维度表、逐请求明细、价格和费用随后异步加载。首屏的 `24h` 趋势按 5 分钟桶聚合，`7d` 按小时桶聚合；更长或自定义范围会自动选择足以控制点数的更粗粒度。
+
 普通模式不显示以下入口和页面：
 
 - 模型价格配置和 models.dev 价格同步
@@ -67,6 +69,8 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 完整模式 HTML 本身不嵌入受保护数据。API Key 明文、标签和密钥安全状态由带 `X-Full-Mode-Session` 鉴权的资源接口按需返回，不能写进普通模式 HTML、普通资源响应或前端静态脚本。仅通过 CSS 隐藏元素不能保护敏感数据。
 
 普通模式和完整模式共享统计数据源，但普通模式会删除 API Key 明文、引用、指纹、加密代际和解密状态。完整模式会根据当前配置的 `api_key_secret` 逐项解密；无法解密的历史密文显示“明文不可用”，不会影响其他统计数据。
+
+`/stats/initial` 与 `/stats/groups` 和旧版 `/stats` 一样执行脱敏：普通模式响应不含 API Key 集合或任何维度中的 API Key 字段；`/stats/trends` 只包含时间、模型和计数器。`api_key_ref` 与兼容的 `api_key_hash` 筛选在所有统计、趋势、维度、请求和费用接口中都必须携带有效的 `X-Full-Mode-Session`，未授权请求会返回 `403`，不能通过查询参数绕过完整模式鉴权。
 
 ### 隐私与安全边界
 
@@ -193,7 +197,10 @@ plugins:
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/dashboard` | 普通模式页面 |
-| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | 聚合统计、维度、趋势和筛选选项 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | 兼容客户端的完整聚合统计 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/initial` | 首屏摘要、紧凑模型汇总和聚合趋势 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/trends` | 下采样后的逐模型趋势，供首屏后异步加载 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/groups` | 服务端排序和分页的详细维度统计 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/requests` | 分页逐请求明细 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/costs` | 基于逐请求记录计算的费用统计 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/exchange-rate` | 缓存的 USD/CNY 汇率 |
@@ -232,7 +239,7 @@ X-Full-Mode-Session: <session-token>
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | 下载数据库备份 |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | 恢复数据库 |
 
-统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source`、`auth_provider`、`auth_account` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。
+统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source`、`auth_provider`、`auth_account` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。`/stats/groups` 另支持 `offset`、`limit`、`sort`、`direction`、`model` 和重复的 `exclude_model`；每页最多 500 条。
 
 重置请求正文：
 
@@ -330,6 +337,8 @@ Normal mode is the default Management Center page:
 
 It displays the project's current non-sensitive statistics, including summaries, trends, cost estimates, grouped dimensions, and per-request metadata. Filters, date ranges, refresh, pagination, sorting, and column settings remain available.
 
+The dashboard requests compact first-screen statistics and renders the summary, model totals, and aggregate trend first. Per-model trends, grouped dimensions, request details, prices, and costs load asynchronously afterwards. The first-screen trend uses five-minute buckets for `24h`, hourly buckets for `7d`, and automatically chooses coarser buckets for longer or custom ranges to keep the point count bounded.
+
 Normal mode does not expose model-price configuration, models.dev synchronization, CSV or Dashboard PNG export, or database backup and restore.
 
 The management-key dialog appears only after the user clicks Full Mode. After CLIProxyAPI Management API authentication succeeds, the plugin issues a random short-lived in-memory capability and navigates to:
@@ -352,6 +361,8 @@ The full-mode session lasts 15 minutes. The capability is sent in the `X-Full-Mo
 The full-mode HTML does not embed protected data. API-key plaintext, labels, and secret-security status are returned on demand only by capability-protected resource endpoints. They are not included in normal-mode HTML, normal resource responses, or static frontend scripts. CSS visibility is not a security boundary.
 
 Normal and full modes share the same statistics source, but normal mode removes API-key plaintext, references, fingerprints, encryption generations, and reveal statuses. Full mode attempts item-by-item decryption with the configured `api_key_secret`; historical ciphertext that cannot be decrypted is shown as "Plaintext unavailable" without affecting other statistics.
+
+Like the legacy `/stats` resource, `/stats/initial` and `/stats/groups` apply redaction: normal-mode responses contain neither an API-key collection nor API-key fields in dimension rows. `/stats/trends` contains only timestamps, model names, and counters. The `api_key_ref` and compatible `api_key_hash` filters require a valid `X-Full-Mode-Session` on every statistics, trend, group, request, and cost endpoint. Requests without that capability receive `403`; query parameters cannot bypass full-mode authorization.
 
 ### Privacy and Security Boundary
 
@@ -457,7 +468,10 @@ Normal resources:
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/dashboard` | Normal-mode page |
-| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | Aggregates, dimensions, trends, and filters |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | Complete aggregates for compatible clients |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/initial` | First-screen summary, compact model totals, and aggregate trend |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/trends` | Downsampled per-model trends loaded after first paint |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/groups` | Server-sorted and paginated detailed dimension statistics |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/requests` | Paginated per-request details |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/costs` | Per-request-derived cost statistics |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/exchange-rate` | Cached USD/CNY exchange rate |
@@ -496,7 +510,7 @@ Management API routes:
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | Download a database backup |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | Restore the database |
 
-Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`, `auth_provider`, and `auth_account`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`.
+Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`, `auth_provider`, and `auth_account`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`. `/stats/groups` additionally accepts `offset`, `limit`, `sort`, `direction`, `model`, and repeated `exclude_model`; pages are limited to 500 rows.
 
 Reset body:
 
