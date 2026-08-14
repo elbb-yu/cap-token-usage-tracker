@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -28,9 +30,17 @@ var (
 	modelPriceSettingsKey   = []byte("model_price_sync_settings")
 	modelPriceLastSyncKey   = []byte("model_price_last_sync")
 	dashboardPreferencesKey = []byte("dashboard_preferences")
+	cryptoKeyIDKey          = []byte("crypto_key_id")
+	apiKeyHashVersionKey    = []byte("api_key_hash_version")
+	apiKeyLabelsKey         = []byte("api_key_labels")
 )
 
-const persistenceSchemaVersion uint64 = 6
+const persistenceSchemaVersion uint64 = 7
+
+const (
+	maxAPIKeyLabels     = 10_000
+	maxAPIKeyLabelRunes = 120
+)
 
 type recordCommand struct {
 	usage normalizedUsage
@@ -107,9 +117,21 @@ type preferencesResult struct {
 	err         error
 }
 
+type labelQueryCommand struct{ resp chan labelQueryResult }
+type labelQueryResult struct {
+	labels map[string]string
+	err    error
+}
+type labelSetCommand struct {
+	hash  string
+	label string
+	resp  chan error
+}
+
 type resetCommand struct{ resp chan error }
 type configCommand struct {
 	config Config
+	crypto cryptoContext
 	resp   chan error
 }
 type closeCommand struct{ resp chan error }
@@ -164,6 +186,7 @@ type Store struct {
 type storeActor struct {
 	db                   *bolt.DB
 	config               Config
+	crypto               cryptoContext
 	data                 map[aggregateKey]Counters
 	dirty                map[aggregateKey]struct{}
 	since                time.Time
@@ -179,9 +202,19 @@ type storeActor struct {
 	lastPriceSync        *PriceSyncMetadata
 	costGeneration       uint64
 	dashboardPreferences DashboardPreferences
+	apiKeyCiphertexts    map[string]string
+	apiKeyLabels         map[string]string
 }
 
 func openStore(config Config) (*Store, error) {
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		return nil, err
+	}
+	return openStoreWithCrypto(config, crypto)
+}
+
+func openStoreWithCrypto(config Config, crypto cryptoContext) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(config.DataPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
@@ -196,9 +229,12 @@ func openStore(config Config) (*Store, error) {
 	actor := &storeActor{
 		db:                   db,
 		config:               config,
+		crypto:               crypto,
 		data:                 make(map[aggregateKey]Counters),
 		dirty:                make(map[aggregateKey]struct{}),
 		dashboardPreferences: defaultDashboardPreferences(),
+		apiKeyCiphertexts:    make(map[string]string),
+		apiKeyLabels:         make(map[string]string),
 	}
 	if err := actor.initialize(); err != nil {
 		_ = db.Close()
@@ -240,7 +276,7 @@ func (s *Store) queryStats(queryRange usageRange) (StatsResponse, error) {
 }
 
 func (s *Store) queryStatsBySource(queryRange usageRange, source string) (StatsResponse, error) {
-	return s.queryStatsByFilter(queryRange, newUsageFilter(source, "", ""))
+	return s.queryStatsByFilter(queryRange, newUsageFilter(source, "", "", ""))
 }
 
 func (s *Store) queryStatsByFilter(queryRange usageRange, filter usageFilter) (StatsResponse, error) {
@@ -265,7 +301,7 @@ func (s *Store) queryRequestPage(queryRange usageRange, offset, limit int, model
 }
 
 func (s *Store) queryRequestPageBySource(queryRange usageRange, offset, limit int, model, source, resultFilter string) (RequestPage, error) {
-	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, "", ""), resultFilter)
+	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, "", "", ""), resultFilter)
 }
 
 func (s *Store) queryRequestPageByFilter(queryRange usageRange, offset, limit int, model string, filter usageFilter, resultFilter string) (RequestPage, error) {
@@ -284,6 +320,23 @@ func (s *Store) QueryDashboardPreferences() (DashboardPreferences, error) {
 	}
 	result := <-resp
 	return result.preferences, result.err
+}
+
+func (s *Store) APIKeyLabels() (map[string]string, error) {
+	resp := make(chan labelQueryResult, 1)
+	if err := s.send(labelQueryCommand{resp: resp}); err != nil {
+		return nil, err
+	}
+	result := <-resp
+	return result.labels, result.err
+}
+
+func (s *Store) SetAPIKeyLabel(hash, label string) error {
+	resp := make(chan error, 1)
+	if err := s.send(labelSetCommand{hash: hash, label: label, resp: resp}); err != nil {
+		return err
+	}
+	return <-resp
 }
 
 func (s *Store) SaveDashboardPreferences(preferences DashboardPreferences) (DashboardPreferences, error) {
@@ -373,8 +426,16 @@ func (s *Store) Reset() error {
 }
 
 func (s *Store) Reconfigure(config Config) error {
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		return err
+	}
+	return s.ReconfigureWithCrypto(config, crypto)
+}
+
+func (s *Store) ReconfigureWithCrypto(config Config, crypto cryptoContext) error {
 	resp := make(chan error, 1)
-	if err := s.send(configCommand{config: config, resp: resp}); err != nil {
+	if err := s.send(configCommand{config: config, crypto: crypto, resp: resp}); err != nil {
 		return err
 	}
 	return <-resp
@@ -483,7 +544,7 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- queryResult{err: withStatus(400, "%v", err)}
 					continue
 				}
-				stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now)
+				stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)
 				item.resp <- queryResult{stats: stats}
 			case requestQueryCommand:
 				now := time.Now().UTC()
@@ -499,6 +560,10 @@ func (s *Store) run(actor *storeActor) {
 			case savePreferencesCommand:
 				preferences, err := actor.saveDashboardPreferences(item.preferences)
 				item.resp <- preferencesResult{preferences: preferences, err: err}
+			case labelQueryCommand:
+				item.resp <- labelQueryResult{labels: cloneStringMap(actor.apiKeyLabels)}
+			case labelSetCommand:
+				item.resp <- actor.setAPIKeyLabel(item.hash, item.label)
 			case priceQueryCommand:
 				item.resp <- priceQueryResult{response: actor.priceBookResponse()}
 			case savePricesCommand:
@@ -545,7 +610,7 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- err
 					continue
 				}
-				err := actor.reconfigure(item.config)
+				err := actor.reconfigure(item.config, item.crypto)
 				if err == nil {
 					ticker.Reset(item.config.FlushInterval)
 				}
@@ -627,6 +692,9 @@ func (a *storeActor) initialize() error {
 		if err := migrateUsageSources(hours, requests, version); err != nil {
 			return err
 		}
+		if err := ensureCryptoIdentity(meta, hours, requests, a.crypto, true); err != nil {
+			return err
+		}
 		return meta.Put(schemaKey, encodeUint64(persistenceSchemaVersion))
 	}); err != nil {
 		return fmt.Errorf("initialize database: %w", err)
@@ -652,13 +720,22 @@ func (a *storeActor) reload() error {
 	a.priceSyncSettings = defaultPriceSyncSettings()
 	a.lastPriceSync = nil
 	a.dashboardPreferences = defaultDashboardPreferences()
+	a.apiKeyCiphertexts = make(map[string]string)
+	a.apiKeyLabels = make(map[string]string)
 
-	return a.db.View(func(tx *bolt.Tx) error {
+	retainedHashes := make(map[string]struct{})
+	err := a.db.View(func(tx *bolt.Tx) error {
 		meta := tx.Bucket(metaBucket)
 		hours := tx.Bucket(hoursBucket)
 		requests := tx.Bucket(requestsBucket)
 		if meta == nil || hours == nil || requests == nil {
 			return errors.New("database buckets are missing")
+		}
+		if decodeUint64(meta.Get(schemaKey)) != persistenceSchemaVersion {
+			return errors.New("database schema is not initialized")
+		}
+		if err := ensureCryptoIdentity(meta, hours, requests, a.crypto, false); err != nil {
+			return err
 		}
 		a.since = time.Unix(0, decodeInt64(meta.Get(sinceKey))).UTC()
 		a.nextRequestSeq = decodeUint64(meta.Get(requestSequenceKey))
@@ -683,6 +760,16 @@ func (a *storeActor) reload() error {
 				return fmt.Errorf("validate dashboard preferences: %w", err)
 			}
 			a.dashboardPreferences = normalized
+		}
+		if raw := meta.Get(apiKeyLabelsKey); len(raw) > 0 {
+			var labels map[string]string
+			if err := json.Unmarshal(raw, &labels); err != nil {
+				return fmt.Errorf("decode API key labels: %w", err)
+			}
+			if err := validateAPIKeyLabels(labels); err != nil {
+				return fmt.Errorf("validate API key labels: %w", err)
+			}
+			a.apiKeyLabels = cloneStringMap(labels)
 		}
 		a.priceRevision = decodeUint64(meta.Get(modelPriceRevisionKey))
 		if a.priceRevision == 0 && len(a.modelPrices) > 0 {
@@ -709,7 +796,7 @@ func (a *storeActor) reload() error {
 		if raw := meta.Get(lastUsedKey); len(raw) > 0 {
 			a.lastUsed = time.Unix(0, decodeInt64(raw)).UTC()
 		}
-		return hours.ForEach(func(hourKey, value []byte) error {
+		if err := hours.ForEach(func(hourKey, value []byte) error {
 			if value != nil {
 				return nil
 			}
@@ -728,10 +815,235 @@ func (a *storeActor) reload() error {
 					return fmt.Errorf("decode counters: %w", err)
 				}
 				a.data[aggregateKey{Hour: hour, Dimensions: dimensions}] = counters
+				if dimensions.APIKeyHash != "" {
+					retainedHashes[dimensions.APIKeyHash] = struct{}{}
+				}
+				return nil
+			})
+		}); err != nil {
+			return err
+		}
+		return requests.ForEach(func(_, value []byte) error {
+			if value == nil {
+				return errors.New("request bucket contains nested bucket")
+			}
+			var request RequestDetail
+			if err := json.Unmarshal(value, &request); err != nil {
+				return fmt.Errorf("decode request detail: %w", err)
+			}
+			if request.APIKeyHash != "" && request.APIKey != "" {
+				a.apiKeyCiphertexts[request.APIKeyHash] = request.APIKey
+			}
+			if request.APIKeyHash != "" {
+				retainedHashes[request.APIKeyHash] = struct{}{}
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+	for hash := range a.apiKeyLabels {
+		if _, retained := retainedHashes[hash]; !retained {
+			return fmt.Errorf("API key label references data outside retention: %s", hash)
+		}
+	}
+	return nil
+}
+
+func databaseHasAPIKeyData(hours, requests *bolt.Bucket) (bool, error) {
+	if hours != nil {
+		found := false
+		err := hours.ForEach(func(hourKey, value []byte) error {
+			if found || value != nil {
+				return nil
+			}
+			hour := hours.Bucket(hourKey)
+			if hour == nil {
+				return nil
+			}
+			return hour.ForEach(func(key, value []byte) error {
+				if value == nil {
+					return nil
+				}
+				var dimensions Dimensions
+				if err := json.Unmarshal(key, &dimensions); err != nil {
+					return fmt.Errorf("decode dimensions while checking crypto identity: %w", err)
+				}
+				if dimensions.APIKey != "" || dimensions.APIKeyHash != "" {
+					found = true
+				}
 				return nil
 			})
 		})
-	})
+		if err != nil || found {
+			return found, err
+		}
+	}
+	if requests != nil {
+		found := false
+		err := requests.ForEach(func(_, value []byte) error {
+			if found || value == nil {
+				return nil
+			}
+			var request RequestDetail
+			if err := json.Unmarshal(value, &request); err != nil {
+				return fmt.Errorf("decode request while checking crypto identity: %w", err)
+			}
+			if request.APIKey != "" || request.APIKeyHash != "" {
+				found = true
+			}
+			return nil
+		})
+		return found, err
+	}
+	return false, nil
+}
+
+func ensureCryptoIdentity(meta, hours, requests *bolt.Bucket, crypto cryptoContext, allowCreate bool) error {
+	keyID := string(meta.Get(cryptoKeyIDKey))
+	hashVersion := string(meta.Get(apiKeyHashVersionKey))
+	if (keyID == "") != (hashVersion == "") {
+		return errors.New("database crypto identity metadata is incomplete")
+	}
+	hasData, err := databaseHasAPIKeyData(hours, requests)
+	if err != nil {
+		return err
+	}
+	if keyID == "" {
+		if hasData {
+			return errors.New("database contains API-key data without crypto identity metadata")
+		}
+		if !crypto.enabled {
+			return nil
+		}
+		if !allowCreate {
+			return errors.New("database crypto identity metadata is missing")
+		}
+		if err := meta.Put(cryptoKeyIDKey, []byte(crypto.keyID)); err != nil {
+			return err
+		}
+		return meta.Put(apiKeyHashVersionKey, []byte(apiKeyHashVersion))
+	}
+	if !crypto.enabled {
+		return errors.New("database is bound to API-key tracking; reset is required before disabling it")
+	}
+	if keyID != crypto.keyID || hashVersion != apiKeyHashVersion {
+		return errors.New("api_key_secret does not match the database crypto identity")
+	}
+	return nil
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func validAPIKeyHash(hash string) bool {
+	if len(hash) != 32 {
+		return false
+	}
+	decoded, err := hex.DecodeString(hash)
+	return err == nil && len(decoded) == 16 && strings.ToLower(hash) == hash
+}
+
+func validateAPIKeyLabel(hash, label string) error {
+	if !validAPIKeyHash(hash) {
+		return errors.New("api key hash must be 32 lowercase hexadecimal characters")
+	}
+	if !utf8.ValidString(label) {
+		return errors.New("api key label must be valid UTF-8")
+	}
+	if utf8.RuneCountInString(label) > maxAPIKeyLabelRunes {
+		return fmt.Errorf("api key label must not exceed %d characters", maxAPIKeyLabelRunes)
+	}
+	return nil
+}
+
+func validateAPIKeyLabels(labels map[string]string) error {
+	if len(labels) > maxAPIKeyLabels {
+		return fmt.Errorf("api key labels exceed limit %d", maxAPIKeyLabels)
+	}
+	for hash, label := range labels {
+		if label == "" {
+			return errors.New("stored api key labels must not be empty")
+		}
+		if err := validateAPIKeyLabel(hash, label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *storeActor) retainedAPIKeyHashes() map[string]struct{} {
+	hashes := make(map[string]struct{})
+	for key := range a.data {
+		if key.Dimensions.APIKeyHash != "" {
+			hashes[key.Dimensions.APIKeyHash] = struct{}{}
+		}
+	}
+	for _, request := range a.pendingRequests {
+		if request.APIKeyHash != "" {
+			hashes[request.APIKeyHash] = struct{}{}
+		}
+	}
+	return hashes
+}
+
+func (a *storeActor) hasRetainedAPIKeyHash(hash string) bool {
+	_, exists := a.retainedAPIKeyHashes()[hash]
+	return exists
+}
+
+func (a *storeActor) saveAPIKeyLabels(labels map[string]string) error {
+	if err := validateAPIKeyLabels(labels); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(labels)
+	if err != nil {
+		return fmt.Errorf("encode API key labels: %w", err)
+	}
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if len(labels) == 0 {
+			return meta.Delete(apiKeyLabelsKey)
+		}
+		return meta.Put(apiKeyLabelsKey, encoded)
+	}); err != nil {
+		return fmt.Errorf("save API key labels: %w", err)
+	}
+	return nil
+}
+
+func (a *storeActor) setAPIKeyLabel(hash, label string) error {
+	if err := validateAPIKeyLabel(hash, label); err != nil {
+		return withStatus(400, "%v", err)
+	}
+	candidate := cloneStringMap(a.apiKeyLabels)
+	if label == "" {
+		delete(candidate, hash)
+	} else {
+		if !a.hasRetainedAPIKeyHash(hash) {
+			return withStatus(404, "api key hash is not present in retained data")
+		}
+		if len(candidate) >= maxAPIKeyLabels {
+			if _, replacing := candidate[hash]; !replacing {
+				return withStatus(409, "api key label limit reached")
+			}
+		}
+		candidate[hash] = label
+	}
+	if err := a.saveAPIKeyLabels(candidate); err != nil {
+		return err
+	}
+	a.apiKeyLabels = candidate
+	return nil
 }
 
 func recoverInterruptedRestore(dataPath string) error {
@@ -772,6 +1084,10 @@ func recoverInterruptedRestore(dataPath string) error {
 }
 
 func validateRestoreDatabase(path string) error {
+	return validateRestoreDatabaseWithCrypto(path, cryptoContext{})
+}
+
+func validateRestoreDatabaseWithCrypto(path string, crypto cryptoContext) error {
 	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: storeOpenProbeTimeout})
 	if err != nil {
 		return fmt.Errorf("open staged restore database: %w", err)
@@ -797,6 +1113,9 @@ func validateRestoreDatabase(path string) error {
 		version := decodeUint64(meta.Get(schemaKey))
 		if version != persistenceSchemaVersion {
 			return fmt.Errorf("unsupported restore schema version %d", version)
+		}
+		if err := ensureCryptoIdentity(meta, hours, requests, crypto, false); err != nil {
+			return err
 		}
 		if raw := meta.Get(sinceKey); len(raw) != 0 && len(raw) != 8 {
 			return errors.New("invalid since metadata")
@@ -843,6 +1162,24 @@ func validateRestoreDatabase(path string) error {
 				return fmt.Errorf("validate dashboard preferences: %w", err)
 			}
 		}
+		if raw := meta.Get(apiKeyLabelsKey); len(raw) > 0 {
+			var labels map[string]string
+			if err := json.Unmarshal(raw, &labels); err != nil {
+				return fmt.Errorf("decode API key labels: %w", err)
+			}
+			if err := validateAPIKeyLabels(labels); err != nil {
+				return fmt.Errorf("validate API key labels: %w", err)
+			}
+			retained, _, err := retainedAPIKeyState(hours, requests)
+			if err != nil {
+				return err
+			}
+			for hash := range labels {
+				if _, ok := retained[hash]; !ok {
+					return fmt.Errorf("API key label references data outside retention: %s", hash)
+				}
+			}
+		}
 		return requests.ForEach(func(key, value []byte) error {
 			if len(key) != 16 {
 				return fmt.Errorf("invalid request key length %d", len(key))
@@ -857,6 +1194,26 @@ func validateRestoreDatabase(path string) error {
 			return nil
 		})
 	})
+}
+
+func migrateRestoreDatabase(path string, config Config, crypto cryptoContext) error {
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: storeOpenProbeTimeout})
+	if err != nil {
+		return fmt.Errorf("open staged restore database for migration: %w", err)
+	}
+	actor := &storeActor{
+		db:                   db,
+		config:               config,
+		crypto:               crypto,
+		data:                 make(map[aggregateKey]Counters),
+		dirty:                make(map[aggregateKey]struct{}),
+		dashboardPreferences: defaultDashboardPreferences(),
+		apiKeyCiphertexts:    make(map[string]string),
+	}
+	initializeErr := actor.initialize()
+	syncErr := db.Sync()
+	closeErr := db.Close()
+	return errors.Join(initializeErr, syncErr, closeErr)
 }
 
 // syncDir fsyncs a directory so directory entries (creates/renames) become durable.
@@ -906,7 +1263,10 @@ func (a *storeActor) restoreBackup(backup []byte) (*bolt.DB, error) {
 	if err := staged.Close(); err != nil {
 		return a.db, fmt.Errorf("close staged restore database: %w", err)
 	}
-	if err := validateRestoreDatabase(stagedPath); err != nil {
+	if err := migrateRestoreDatabase(stagedPath, a.config, a.crypto); err != nil {
+		return a.db, withStatus(400, "invalid backup database: %v", err)
+	}
+	if err := validateRestoreDatabaseWithCrypto(stagedPath, a.crypto); err != nil {
 		return a.db, withStatus(400, "invalid backup database: %v", err)
 	}
 
@@ -1160,9 +1520,19 @@ func migratePriceMetadata(meta *bolt.Bucket, version uint64) error {
 
 func (a *storeActor) record(usage normalizedUsage) error {
 	usage.Dimensions = sanitizeDimensionsSource(usage.Dimensions)
+	if usage.Dimensions.APIKey != "" || usage.Dimensions.APIKeyHash != "" {
+		if err := a.db.Update(func(tx *bolt.Tx) error {
+			return ensureCryptoIdentity(tx.Bucket(metaBucket), tx.Bucket(hoursBucket), tx.Bucket(requestsBucket), a.crypto, true)
+		}); err != nil {
+			return fmt.Errorf("validate database crypto identity: %w", err)
+		}
+	}
+	aggregateDimensions := usage.Dimensions
+	ciphertext := aggregateDimensions.APIKey
+	aggregateDimensions.APIKey = ""
 	key := aggregateKey{
 		Hour:       usage.RequestedAt.UTC().Truncate(time.Minute).Unix(),
-		Dimensions: usage.Dimensions,
+		Dimensions: aggregateDimensions,
 	}
 	counters := a.data[key]
 	counters.add(countersForUsage(usage))
@@ -1173,6 +1543,9 @@ func (a *storeActor) record(usage normalizedUsage) error {
 		a.nextRequestSeq = 1
 	}
 	a.pendingRequests = append(a.pendingRequests, requestDetailForUsage(usage, a.nextRequestSeq))
+	if ciphertext != "" && aggregateDimensions.APIKeyHash != "" {
+		a.apiKeyCiphertexts[aggregateDimensions.APIKeyHash] = ciphertext
+	}
 	a.pending++
 	if a.lastUsed.IsZero() || usage.RequestedAt.After(a.lastUsed) {
 		a.lastUsed = usage.RequestedAt
@@ -1194,6 +1567,10 @@ func (a *storeActor) retryFailedFlush(now time.Time) error {
 }
 
 func (a *storeActor) flush(now time.Time, force bool) error {
+	return a.flushWithCryptoIdentity(now, force, nil)
+}
+
+func (a *storeActor) flushWithCryptoIdentity(now time.Time, force bool, identity *cryptoContext) error {
 	shouldPrune := a.lastPruneAt.IsZero() || now.Sub(a.lastPruneAt) >= time.Hour
 	if len(a.dirty) == 0 && len(a.pendingRequests) == 0 && !shouldPrune && !force {
 		return nil
@@ -1206,12 +1583,19 @@ func (a *storeActor) flush(now time.Time, force bool) error {
 			nextSince = cutoffTime
 		}
 	}
+	var nextCiphertexts map[string]string
+	var nextLabels map[string]string
 	err := a.db.Update(func(tx *bolt.Tx) error {
 		meta := tx.Bucket(metaBucket)
 		hours := tx.Bucket(hoursBucket)
 		requests := tx.Bucket(requestsBucket)
 		if meta == nil || hours == nil || requests == nil {
 			return errors.New("database buckets are missing")
+		}
+		if identity != nil {
+			if err := ensureCryptoIdentity(meta, hours, requests, *identity, true); err != nil {
+				return err
+			}
 		}
 		for key := range a.dirty {
 			hourBucket, err := hours.CreateBucketIfNotExists(encodeInt64(key.Hour))
@@ -1254,7 +1638,32 @@ func (a *storeActor) flush(now time.Time, force bool) error {
 			if err := pruneHoursBucket(hours, cutoff); err != nil {
 				return err
 			}
-			return pruneRequestsBucket(requests, time.Unix(cutoff, 0).UTC().UnixNano())
+			if err := pruneRequestsBucket(requests, time.Unix(cutoff, 0).UTC().UnixNano()); err != nil {
+				return err
+			}
+			retained, ciphertexts, err := retainedAPIKeyState(hours, requests)
+			if err != nil {
+				return err
+			}
+			labels := cloneStringMap(a.apiKeyLabels)
+			for hash := range labels {
+				if _, ok := retained[hash]; !ok {
+					delete(labels, hash)
+				}
+			}
+			encoded, err := json.Marshal(labels)
+			if err != nil {
+				return err
+			}
+			if len(labels) == 0 {
+				if err := meta.Delete(apiKeyLabelsKey); err != nil {
+					return err
+				}
+			} else if err := meta.Put(apiKeyLabelsKey, encoded); err != nil {
+				return err
+			}
+			nextCiphertexts = ciphertexts
+			nextLabels = labels
 		}
 		return nil
 	})
@@ -1274,11 +1683,13 @@ func (a *storeActor) flush(now time.Time, force bool) error {
 			}
 		}
 		a.lastPruneAt = now
+		a.apiKeyCiphertexts = nextCiphertexts
+		a.apiKeyLabels = nextLabels
 	}
 	return nil
 }
 
-func (a *storeActor) reconfigure(config Config) error {
+func (a *storeActor) reconfigure(config Config, crypto cryptoContext) error {
 	if config.DataPath != a.config.DataPath {
 		return errors.New("data_path changes require opening a new store")
 	}
@@ -1287,11 +1698,14 @@ func (a *storeActor) reconfigure(config Config) error {
 		return err
 	}
 	previous := a.config
+	previousCrypto := a.crypto
 	previousPrune := a.lastPruneAt
 	a.config = config
+	a.crypto = crypto
 	a.lastPruneAt = time.Time{}
-	if err := a.flush(time.Now().UTC(), true); err != nil {
+	if err := a.flushWithCryptoIdentity(time.Now().UTC(), true, &crypto); err != nil {
 		a.config = previous
+		a.crypto = previousCrypto
 		a.lastPruneAt = previousPrune
 		a.lastFlushErr = err
 		return err
@@ -1491,6 +1905,15 @@ func (a *storeActor) reset() error {
 		if err := meta.Put(requestSequenceKey, encodeUint64(0)); err != nil {
 			return err
 		}
+		if err := meta.Delete(cryptoKeyIDKey); err != nil {
+			return err
+		}
+		if err := meta.Delete(apiKeyHashVersionKey); err != nil {
+			return err
+		}
+		if err := meta.Delete(apiKeyLabelsKey); err != nil {
+			return err
+		}
 		return meta.Delete(lastUsedKey)
 	}); err != nil {
 		return fmt.Errorf("reset database: %w", err)
@@ -1503,6 +1926,8 @@ func (a *storeActor) reset() error {
 	a.lastFlushErr = nil
 	a.since = now
 	a.lastUsed = time.Time{}
+	a.apiKeyCiphertexts = make(map[string]string)
+	a.apiKeyLabels = make(map[string]string)
 	a.costGeneration++
 	return nil
 }
@@ -1617,6 +2042,7 @@ func (a *storeActor) queryExactStats(queryRange usageRange, filter usageFilter, 
 				return fmt.Errorf("decode request detail: %w", err)
 			}
 			dimensions := sanitizeDimensionsSource(item.Dimensions)
+			dimensions.APIKey = ""
 			counters := item.Counters
 			if item.LatencyNS > 0 {
 				counters.TotalLatencyNS = item.LatencyNS
@@ -1636,7 +2062,7 @@ func (a *storeActor) queryExactStats(queryRange usageRange, filter usageFilter, 
 	if err != nil {
 		return StatsResponse{}, fmt.Errorf("query exact stats: %w", err)
 	}
-	return buildStatsForRangeWithFilter(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, filter, now), nil
+	return buildStatsForRangeWithFilter(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, filter, now, a.apiKeyCiphertexts), nil
 }
 
 func retentionCutoff(config Config, now time.Time) int64 {
@@ -1682,6 +2108,54 @@ func pruneRequestsBucket(requests *bolt.Bucket, cutoffUnixNano int64) error {
 		}
 	}
 	return nil
+}
+
+func retainedAPIKeyState(hours, requests *bolt.Bucket) (map[string]struct{}, map[string]string, error) {
+	hashes := make(map[string]struct{})
+	ciphertexts := make(map[string]string)
+	if err := hours.ForEach(func(hourKey, value []byte) error {
+		if value != nil {
+			return nil
+		}
+		hour := hours.Bucket(hourKey)
+		if hour == nil {
+			return nil
+		}
+		return hour.ForEach(func(key, value []byte) error {
+			if value == nil {
+				return nil
+			}
+			var dimensions Dimensions
+			if err := json.Unmarshal(key, &dimensions); err != nil {
+				return fmt.Errorf("decode dimensions while pruning API key state: %w", err)
+			}
+			if dimensions.APIKeyHash != "" {
+				hashes[dimensions.APIKeyHash] = struct{}{}
+			}
+			return nil
+		})
+	}); err != nil {
+		return nil, nil, err
+	}
+	if err := requests.ForEach(func(_, value []byte) error {
+		if value == nil {
+			return errors.New("request bucket contains nested bucket")
+		}
+		var request RequestDetail
+		if err := json.Unmarshal(value, &request); err != nil {
+			return fmt.Errorf("decode request while pruning API key state: %w", err)
+		}
+		if request.APIKeyHash != "" {
+			hashes[request.APIKeyHash] = struct{}{}
+			if request.APIKey != "" {
+				ciphertexts[request.APIKeyHash] = request.APIKey
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	return hashes, ciphertexts, nil
 }
 
 func encodeUint64(value uint64) []byte {

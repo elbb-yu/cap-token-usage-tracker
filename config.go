@@ -21,14 +21,16 @@ type Config struct {
 	FlushInterval   time.Duration
 	FlushMaxRecords int
 	SyncOnRecord    bool
+	APIKeySecret    string
 }
 
 type configYAML struct {
-	DataPath        string `yaml:"data_path"`
-	RetentionDays   *int   `yaml:"retention_days"`
-	FlushInterval   string `yaml:"flush_interval"`
-	FlushMaxRecords *int   `yaml:"flush_max_records"`
-	SyncOnRecord    *bool  `yaml:"sync_on_record"`
+	DataPath        string  `yaml:"data_path"`
+	RetentionDays   *int    `yaml:"retention_days"`
+	FlushInterval   string  `yaml:"flush_interval"`
+	FlushMaxRecords *int    `yaml:"flush_max_records"`
+	SyncOnRecord    *bool   `yaml:"sync_on_record"`
+	APIKeySecret    *string `yaml:"api_key_secret"`
 }
 
 func defaultConfig() Config {
@@ -38,6 +40,7 @@ func defaultConfig() Config {
 		FlushInterval:   defaultFlushInterval,
 		FlushMaxRecords: defaultFlushMaxRecords,
 		SyncOnRecord:    true,
+		APIKeySecret:    defaultAPIKeySecret,
 	}
 }
 
@@ -70,6 +73,9 @@ func parseConfig(raw []byte) (Config, error) {
 	if input.SyncOnRecord != nil {
 		cfg.SyncOnRecord = *input.SyncOnRecord
 	}
+	if input.APIKeySecret != nil {
+		cfg.APIKeySecret = *input.APIKeySecret
+	}
 	return normalizeConfig(cfg)
 }
 
@@ -85,6 +91,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.FlushMaxRecords < 1 || cfg.FlushMaxRecords > 1_000_000 {
 		return Config{}, fmt.Errorf("flush_max_records must be between 1 and 1000000")
+	}
+	if cfg.APIKeySecret != "" && cfg.APIKeySecret != defaultAPIKeySecret && len([]byte(cfg.APIKeySecret)) < 32 {
+		return Config{}, fmt.Errorf("api_key_secret must be empty, 123456, or at least 32 bytes")
 	}
 	absolute, err := filepath.Abs(filepath.Clean(cfg.DataPath))
 	if err != nil {

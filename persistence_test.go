@@ -132,7 +132,7 @@ func TestAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T
 		}
 	}
 	queryRange := usageRange{Name: "24h", Start: now.Add(-time.Hour)}
-	filter := newUsageFilter("cli", "Codex", "user@example.com")
+	filter := newUsageFilter("cli", "Codex", "user@example.com", "")
 	stats, err := store.queryStatsByFilter(queryRange, filter)
 	if err != nil || stats.Summary.Requests != 1 || stats.Summary.TotalTokens != 2 || len(stats.AuthIdentities) != 2 {
 		t.Fatalf("filtered stats = %+v, %v", stats, err)

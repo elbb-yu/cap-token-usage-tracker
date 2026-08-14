@@ -129,7 +129,7 @@ func TestBuildStatsForRangeSeparatesAndFiltersAuthenticationIdentities(t *testin
 		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}}: {Requests: 1, TotalTokens: 10},
 	}
 
-	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, newUsageFilter("cli", "Codex", "user@example.com"), now)
+	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, newUsageFilter("cli", "Codex", "user@example.com", ""), now, nil)
 	if stats.Summary.Requests != 2 || stats.Summary.TotalTokens != 20 || len(stats.Groups) != 1 || stats.Groups[0].AuthProvider != "Codex" {
 		t.Fatalf("identity-filtered stats = %+v", stats)
 	}

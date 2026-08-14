@@ -316,5 +316,19 @@
   "fullMode.title": "Полный режим",
   "fullMode.description": "Введите ключ управления CLIProxyAPI, чтобы открыть отдельную панель полного режима.",
   "fullMode.managementKey": "Ключ управления CLIProxyAPI",
-  "fullMode.keyRequired": "Введите ключ управления CLIProxyAPI."
+  "fullMode.keyRequired": "Введите ключ управления CLIProxyAPI.",
+  "table.apiKey": "API Key",
+  "apiKey.filter": "API Key",
+  "apiKey.all": "Все API Key",
+  "apiKey.editLabel": "Изменить метку API Key",
+  "apiKey.label": "Метка",
+  "apiKey.labelPlaceholder": "Необязательная метка",
+  "apiKey.labelHint": "Оставьте поле пустым, чтобы удалить метку.",
+  "apiKey.saveLabel": "Сохранить метку",
+  "apiKey.deleteLabel": "Удалить метку",
+  "apiKey.trackingDisabled": "Отслеживание API Key отключено.",
+  "apiKey.plaintextUnavailable": "Открытый текст недоступен",
+  "apiKey.defaultSecretWarning": "Используется общедоступный секрет по умолчанию 123456. Любой, кто получит базу данных или резервную копию, сможет расшифровать сохраненные API Key. Настройте собственный секрет длиной не менее 32 байт.",
+  "apiKey.labelTooLong": "Метка должна содержать не более 120 символов.",
+  "apiKey.saveFailed": "Не удалось сохранить метку API Key."
 }

@@ -16,6 +16,8 @@ type Dimensions struct {
 	Source          string `json:"source"`
 	AuthProvider    string `json:"auth_provider,omitempty"`
 	AuthAccount     string `json:"auth_account,omitempty"`
+	APIKey          string `json:"api_key,omitempty"`
+	APIKeyHash      string `json:"api_key_hash,omitempty"`
 	AuthType        string `json:"auth_type"`
 	ServiceTier     string `json:"service_tier"`
 	ReasoningEffort string `json:"reasoning_effort"`
@@ -29,20 +31,40 @@ type usageFilter struct {
 	Source       string
 	AuthProvider string
 	AuthAccount  string
+	APIKeyHash   string
 }
 
-func newUsageFilter(source, authProvider, authAccount string) usageFilter {
+func newUsageFilter(source, authProvider, authAccount, apiKeyHash string) usageFilter {
 	return usageFilter{
 		Source:       normalizeDimension(source),
 		AuthProvider: normalizeDimension(authProvider),
 		AuthAccount:  normalizeDimension(authAccount),
+		APIKeyHash:   normalizeDimension(apiKeyHash),
 	}
 }
 
 func (f usageFilter) matches(dimensions Dimensions) bool {
 	return (f.Source == "" || dimensions.Source == f.Source) &&
 		(f.AuthProvider == "" || dimensions.AuthProvider == f.AuthProvider) &&
-		(f.AuthAccount == "" || dimensions.AuthAccount == f.AuthAccount)
+		(f.AuthAccount == "" || dimensions.AuthAccount == f.AuthAccount) &&
+		(f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash)
+}
+
+func (d *Dimensions) Redact() {
+	d.APIKey = ""
+	d.APIKeyHash = ""
+}
+
+func (d *Dimensions) Reveal(decrypt DecryptFunc) {
+	if d.APIKey == "" || d.APIKeyHash == "" {
+		return
+	}
+	plaintext, err := decrypt(d.APIKey, d.APIKeyHash)
+	if err != nil {
+		d.APIKey = ""
+		return
+	}
+	d.APIKey = plaintext
 }
 
 type Counters struct {
@@ -149,6 +171,36 @@ type StatsResponse struct {
 	ModelSeries    []ModelSeriesPoint   `json:"model_series"`
 	Sources        []string             `json:"sources"`
 	AuthIdentities []AuthIdentityOption `json:"auth_identities"`
+	APIKeys        []APIKeyOption       `json:"api_keys,omitempty"`
+}
+
+type APIKeyOption struct {
+	Hash string `json:"hash"`
+	Key  string `json:"key,omitempty"`
+}
+
+func (s *StatsResponse) Redact() {
+	for i := range s.Groups {
+		s.Groups[i].Dimensions.Redact()
+	}
+	s.APIKeys = nil
+}
+
+func (s *StatsResponse) Reveal(decrypt DecryptFunc) {
+	for i := range s.Groups {
+		s.Groups[i].Dimensions.Reveal(decrypt)
+	}
+	for i := range s.APIKeys {
+		if s.APIKeys[i].Key == "" {
+			continue
+		}
+		plaintext, err := decrypt(s.APIKeys[i].Key, s.APIKeys[i].Hash)
+		if err != nil {
+			s.APIKeys[i].Key = ""
+			continue
+		}
+		s.APIKeys[i].Key = plaintext
+	}
 }
 
 type AuthIdentityOption struct {
@@ -172,10 +224,10 @@ func buildStats(data map[aggregateKey]Counters, since, lastUsed time.Time, reque
 }
 
 func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, source string, now time.Time) StatsResponse {
-	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, "", ""), now)
+	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, "", "", ""), now, nil)
 }
 
-func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time) StatsResponse {
+func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time, apiKeyCiphertexts map[string]string) StatsResponse {
 	groups := make(map[Dimensions]Counters)
 	series := make(map[int64]Counters)
 	modelSeries := make(map[struct {
@@ -185,6 +237,7 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 	summary := Counters{}
 	sources := make(map[string]struct{})
 	identities := make(map[usageIdentity]struct{})
+	apiKeyHashes := make(map[string]struct{})
 	for key, counters := range data {
 		bucketTime := time.Unix(key.Hour, 0).UTC()
 		if !queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start) {
@@ -202,6 +255,9 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		}
 		if !filter.matches(dimensions) {
 			continue
+		}
+		if dimensions.APIKeyHash != "" {
+			apiKeyHashes[dimensions.APIKeyHash] = struct{}{}
 		}
 		group := groups[dimensions]
 		group.add(counters)
@@ -228,6 +284,9 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 
 	groupRows := make([]GroupStats, 0, len(groups))
 	for dimensions, counters := range groups {
+		if dimensions.APIKeyHash != "" {
+			dimensions.APIKey = apiKeyCiphertexts[dimensions.APIKeyHash]
+		}
 		groupRows = append(groupRows, GroupStats{
 			Dimensions:       dimensions,
 			Counters:         counters,
@@ -294,6 +353,11 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		}
 		return identityValues[i].Account < identityValues[j].Account
 	})
+	apiKeys := make([]APIKeyOption, 0, len(apiKeyHashes))
+	for hash := range apiKeyHashes {
+		apiKeys = append(apiKeys, APIKeyOption{Hash: hash, Key: apiKeyCiphertexts[hash]})
+	}
+	sort.Slice(apiKeys, func(i, j int) bool { return apiKeys[i].Hash < apiKeys[j].Hash })
 
 	return StatsResponse{
 		SchemaVersion:  1,
@@ -307,6 +371,7 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		ModelSeries:    modelPoints,
 		Sources:        sourceValues,
 		AuthIdentities: identityValues,
+		APIKeys:        apiKeys,
 	}
 }
 
@@ -376,6 +441,7 @@ func compareDimensions(left, right Dimensions) int {
 		cmp.Compare(left.Source, right.Source),
 		cmp.Compare(left.AuthProvider, right.AuthProvider),
 		cmp.Compare(left.AuthAccount, right.AuthAccount),
+		cmp.Compare(left.APIKeyHash, right.APIKeyHash),
 		cmp.Compare(left.AuthType, right.AuthType),
 		cmp.Compare(left.ServiceTier, right.ServiceTier),
 		cmp.Compare(left.ReasoningEffort, right.ReasoningEffort),

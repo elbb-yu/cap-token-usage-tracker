@@ -58,13 +58,15 @@ func decodeUsage(raw []byte, now time.Time) (normalizedUsage, error) {
 	provider := normalizeDimension(firstString(root, "Provider", "provider"))
 	executorType := normalizeDimension(firstString(root, "ExecutorType", "executor_type"))
 	authType := normalizeDimension(firstString(root, "AuthType", "auth_type"))
+	apiKey := firstString(root, "APIKey", "api_key")
 	return normalizedUsage{
 		Dimensions: Dimensions{
 			Provider:        provider,
 			ExecutorType:    executorType,
 			Model:           normalizeDimension(firstString(root, "Model", "model")),
 			Alias:           normalizeDimension(firstString(root, "Alias", "alias")),
-			Source:          safeUsageSource(firstString(root, "Source", "source"), firstString(root, "APIKey", "api_key"), provider, executorType, authType),
+			Source:          safeUsageSource(firstString(root, "Source", "source"), apiKey, provider, executorType, authType),
+			APIKey:          normalizeDimension(apiKey),
 			AuthType:        authType,
 			ServiceTier:     normalizeDimension(firstString(root, "ServiceTier", "service_tier")),
 			ReasoningEffort: normalizeDimension(firstString(root, "ReasoningEffort", "reasoning_effort")),

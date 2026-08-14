@@ -316,5 +316,19 @@
   "fullMode.title": "完整模式",
   "fullMode.description": "输入 CLIProxyAPI 管理密钥以打开独立的完整模式仪表盘。",
   "fullMode.managementKey": "CLIProxyAPI 管理密钥",
-  "fullMode.keyRequired": "请输入 CLIProxyAPI 管理密钥。"
+  "fullMode.keyRequired": "请输入 CLIProxyAPI 管理密钥。",
+  "table.apiKey": "API Key",
+  "apiKey.filter": "API Key",
+  "apiKey.all": "全部 API Key",
+  "apiKey.editLabel": "编辑 API Key 备注",
+  "apiKey.label": "备注",
+  "apiKey.labelPlaceholder": "可选备注",
+  "apiKey.labelHint": "留空并保存即可删除备注。",
+  "apiKey.saveLabel": "保存备注",
+  "apiKey.deleteLabel": "删除备注",
+  "apiKey.trackingDisabled": "API Key 追踪未启用。",
+  "apiKey.plaintextUnavailable": "明文不可用",
+  "apiKey.defaultSecretWarning": "当前使用公开默认密钥 123456。任何获得数据库或备份的人都可以解密其中保存的 API Key。请改用至少 32 字节的自定义密钥。",
+  "apiKey.labelTooLong": "备注最多 120 个字符。",
+  "apiKey.saveFailed": "保存 API Key 备注失败。"
 }

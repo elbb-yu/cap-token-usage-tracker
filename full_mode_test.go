@@ -14,7 +14,17 @@ import (
 )
 
 func TestFullModeSessionProtectsFullModeResources(t *testing.T) {
-	runtime := &pluginRuntime{}
+	config := testConfig(t)
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config, crypto: crypto}
+	defer runtime.shutdown()
 	raw, err := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
 	if err != nil {
 		t.Fatal(err)

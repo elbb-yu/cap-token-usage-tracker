@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
@@ -220,7 +221,54 @@ func (r *pluginRuntime) fullModeDataResponse(request pluginapi.ManagementRequest
 	if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
 		return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
 	}
-	return jsonResponse(http.StatusOK, map[string]any{"full_mode": true, "sensitive_data": []any{}}), nil
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.store == nil {
+		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "storage is not initialized"}), nil
+	}
+	labels, err := r.store.APIKeyLabels()
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]string{"error": err.Error()}), nil
+	}
+	crypto := r.crypto
+	return jsonResponse(http.StatusOK, map[string]any{
+		"full_mode":                   true,
+		"sensitive_data":              []any{},
+		"api_key_tracking_enabled":    crypto.enabled,
+		"api_key_uses_default_secret": crypto.enabled && crypto.usesDefaultSecret,
+		"api_key_labels":              labels,
+	}), nil
+}
+
+func (r *pluginRuntime) setAPIKeyLabelResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+		return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+	}
+	if len(request.Body) > 16<<10 {
+		return jsonResponse(http.StatusRequestEntityTooLarge, map[string]string{"error": "API key label JSON is too large"}), nil
+	}
+	if !utf8.Valid(request.Body) {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "API key label JSON must be valid UTF-8"}), nil
+	}
+	var input struct {
+		Hash  string `json:"hash"`
+		Label string `json:"label"`
+	}
+	if err := decodeStrictJSON(request.Body, &input); err != nil {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid API key label JSON"}), nil
+	}
+	if err := validateAPIKeyLabel(input.Hash, input.Label); err != nil {
+		return jsonResponse(http.StatusBadRequest, map[string]string{"error": err.Error()}), nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.store == nil {
+		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "storage is not initialized"}), nil
+	}
+	if err := r.store.SetAPIKeyLabel(input.Hash, input.Label); err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]string{"error": err.Error()}), nil
+	}
+	return jsonResponse(http.StatusOK, map[string]any{"saved": true, "hash": input.Hash, "label": input.Label}), nil
 }
 
 func (r *pluginRuntime) revokeFullModeSessionResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {

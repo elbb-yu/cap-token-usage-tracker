@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type pluginRuntime struct {
 	mu               sync.RWMutex
 	store            *Store
 	config           Config
+	crypto           cryptoContext
 	routes           registeredRoutes
 	modelsDevFetcher *modelsDevFetcher
 	exchangeRates    *exchangeRateService
@@ -91,22 +93,30 @@ func negotiateRPCSchema(hostSchema uint32) uint32 {
 }
 
 func (r *pluginRuntime) applyConfig(config Config) error {
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		return err
+	}
 	r.mu.RLock()
 	current := r.store
 	currentConfig := r.config
 	r.mu.RUnlock()
 
 	if current != nil && currentConfig.DataPath == config.DataPath {
-		if err := current.Reconfigure(config); err != nil {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if r.store != current || r.config.DataPath != config.DataPath {
+			return errors.New("plugin storage changed during reconfiguration")
+		}
+		if err := current.ReconfigureWithCrypto(config, crypto); err != nil {
 			return err
 		}
-		r.mu.Lock()
 		r.config = config
-		r.mu.Unlock()
+		r.crypto = crypto
 		return nil
 	}
 
-	next, err := openStore(config)
+	next, err := openStoreWithCrypto(config, crypto)
 	if err != nil {
 		return err
 	}
@@ -114,6 +124,7 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 	old := r.store
 	r.store = next
 	r.config = config
+	r.crypto = crypto
 	r.mu.Unlock()
 	r.fullModeMu.Lock()
 	r.fullModeSessions = nil
@@ -138,6 +149,20 @@ func (r *pluginRuntime) handleUsage(raw []byte) (map[string]any, error) {
 	if r.store == nil {
 		return nil, withStatus(503, "plugin storage is not initialized")
 	}
+	crypto := r.crypto
+	plainKey := usage.Dimensions.APIKey
+	if plainKey != "" && crypto.enabled {
+		fingerprint := apiKeyFingerprint(plainKey, crypto.indexKey)
+		ciphertext, err := encryptAPIKey(crypto, plainKey, fingerprint)
+		if err != nil {
+			return nil, fmt.Errorf("encrypt api key: %w", err)
+		}
+		usage.Dimensions.APIKeyHash = fingerprint
+		usage.Dimensions.APIKey = ciphertext
+	} else {
+		usage.Dimensions.APIKey = ""
+		usage.Dimensions.APIKeyHash = ""
+	}
 	if err := r.store.Record(usage); err != nil {
 		return nil, err
 	}
@@ -152,6 +177,7 @@ func (r *pluginRuntime) shutdown() error {
 	store := r.store
 	r.store = nil
 	r.config = Config{}
+	r.crypto = cryptoContext{}
 	r.routes = registeredRoutes{}
 	r.exchangeRates = nil
 	r.authResolver = nil
@@ -224,6 +250,7 @@ func pluginRegistration(schemaVersion uint32) registration {
 				{Name: "flush_interval", Type: pluginapi.ConfigFieldTypeString, Description: "Maximum delay before batched statistics are flushed, for example 5s."},
 				{Name: "flush_max_records", Type: pluginapi.ConfigFieldTypeInteger, Description: "Flush after this many accepted usage records."},
 				{Name: "sync_on_record", Type: pluginapi.ConfigFieldTypeBoolean, Description: "Commit every usage record before acknowledging it."},
+				{Name: "api_key_secret", Type: pluginapi.ConfigFieldTypeString, Description: "Secret for API-key encryption and keyed fingerprints. Defaults to 123456; set a custom value of at least 32 bytes for protection against database disclosure. Empty disables API-key tracking. The value cannot change while the database contains API-key data."},
 			},
 		},
 		Capabilities: registrationCapabilities{UsagePlugin: true, ManagementAPI: true},

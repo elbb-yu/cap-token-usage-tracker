@@ -34,8 +34,17 @@ func TestManagementRegistrationUsesDynamicPluginID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(registration.Routes) != 7 || registration.Routes[0].Method != http.MethodPost || registration.Routes[0].Path != "/plugins/custom-id/full-mode/session" || registration.Routes[1].Path != "/plugins/custom-id/stats" || registration.Routes[3].Method != http.MethodPut || registration.Routes[3].Path != "/plugins/custom-id/prices" || registration.Routes[4].Path != "/plugins/custom-id/prices/sync" || registration.Routes[5].Method != http.MethodGet || registration.Routes[5].Path != "/plugins/custom-id/backup" || registration.Routes[6].Method != http.MethodPost || registration.Routes[6].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 15 || registration.Resources[0].Path != "/dashboard" || registration.Resources[1].Path != "/full-dashboard" || registration.Resources[2].Path != "/full-mode/data" || registration.Resources[3].Path != "/full-mode/session/revoke" || registration.Resources[4].Path != "/full-mode/prices" || registration.Resources[5].Path != "/full-mode/prices/save" || registration.Resources[6].Path != "/full-mode/prices/sync" || registration.Resources[7].Path != "/full-mode/backup" || registration.Resources[8].Path != "/full-mode/restore" || registration.Resources[9].Path != "/stats" || registration.Resources[10].Path != "/requests" || registration.Resources[11].Path != "/costs" || registration.Resources[12].Path != "/exchange-rate" || registration.Resources[13].Path != "/prices" || registration.Resources[14].Path != "/preferences" {
+	if len(registration.Routes) != 7 || registration.Routes[0].Method != http.MethodPost || registration.Routes[0].Path != "/plugins/custom-id/full-mode/session" || registration.Routes[1].Path != "/plugins/custom-id/stats" || registration.Routes[3].Method != http.MethodPut || registration.Routes[3].Path != "/plugins/custom-id/prices" || registration.Routes[4].Path != "/plugins/custom-id/prices/sync" || registration.Routes[5].Method != http.MethodGet || registration.Routes[5].Path != "/plugins/custom-id/backup" || registration.Routes[6].Method != http.MethodPost || registration.Routes[6].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 16 {
 		t.Fatalf("unexpected registration: %+v", registration)
+	}
+	resourcePaths := make(map[string]bool, len(registration.Resources))
+	for _, resource := range registration.Resources {
+		resourcePaths[resource.Path] = true
+	}
+	for _, path := range []string{"/dashboard", "/full-dashboard", "/full-mode/data", "/full-mode/api-key-labels", "/full-mode/session/revoke", "/full-mode/prices", "/full-mode/prices/save", "/full-mode/prices/sync", "/full-mode/backup", "/full-mode/restore", "/stats", "/requests", "/costs", "/exchange-rate", "/prices", "/preferences"} {
+		if !resourcePaths[path] {
+			t.Fatalf("registration missing resource %q: %+v", path, registration.Resources)
+		}
 	}
 	if registration.Routes[0].Menu != "" {
 		t.Fatal("authenticated stats route must not declare a legacy menu")

@@ -59,7 +59,10 @@ func TestDecodeUsageSDKJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{"must-not-survive", "secret-auth", "private failure body", record.AuthIndex} {
+	if usage.Dimensions.APIKey != record.APIKey {
+		t.Fatalf("transient API key = %q", usage.Dimensions.APIKey)
+	}
+	for _, secret := range []string{"secret-auth", "private failure body", record.AuthIndex} {
 		if strings.Contains(string(encoded), secret) {
 			t.Fatalf("sensitive value leaked: %s", secret)
 		}
@@ -107,12 +110,8 @@ func TestDecodeUsageReplacesAPIKeySourceWithProviderServiceAddress(t *testing.T)
 	if usage.Dimensions.Source != "https://api.openai.com/v1" {
 		t.Fatalf("source = %q, want OpenAI service address", usage.Dimensions.Source)
 	}
-	encoded, err := json.Marshal(usage)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(encoded), apiKey) {
-		t.Fatalf("API key leaked in normalized usage: %s", encoded)
+	if usage.Dimensions.APIKey != apiKey {
+		t.Fatalf("transient API key = %q", usage.Dimensions.APIKey)
 	}
 }
 
