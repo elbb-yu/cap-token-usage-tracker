@@ -645,7 +645,7 @@ func TestFullModeUsesSeparateProtectedDashboard(t *testing.T) {
 	if !strings.Contains(fullDashboardHTML, `var resetURL=resourceBase+'/full-mode/reset';`) || !strings.Contains(fullDashboardHTML, `async function resetStats(){if(!fullModeEnabled||!fullModeSession){text('error',t('fullMode.keyRequired'));return;}`) {
 		t.Fatal("full dashboard reset must use the session-protected resource route")
 	}
-	for _, forbidden := range []string{`askBackupManagementKey`, `managementBase+'/backup'`, `managementBase+'/restore'`, `Authorization':'Bearer '+managementKey,'Content-Type':'application/octet-stream'`, `function askManagementKey()`, `id="resetDialog"`, `resetKeyInput`, `Authorization':'Bearer '+managementKey` } {
+	for _, forbidden := range []string{`askBackupManagementKey`, `managementBase+'/backup'`, `managementBase+'/restore'`, `Authorization':'Bearer '+managementKey,'Content-Type':'application/octet-stream'`, `function askManagementKey()`, `id="resetDialog"`, `resetKeyInput`, `Authorization':'Bearer '+managementKey`} {
 		if strings.Contains(fullDashboardHTML, forbidden) {
 			t.Fatalf("full dashboard export must not use a management key %q", forbidden)
 		}
