@@ -34,6 +34,7 @@ func TestAPIKeyDashboardIsFullModeOnly(t *testing.T) {
 		"apiKeyOptions=next;if(selectedAPIKeyRef&&!apiKeyOptionForRef(selectedAPIKeyRef)){selectedAPIKeyRef='';",
 		"initializeAPIKeyFullMode(payload)",
 		"initializeAPIKeyFullMode(responses[3])",
+		".apikey-security-warning[hidden]{display:none!important}",
 		"api_key_uses_default_secret",
 		"api(resourceBase+'/full-mode/data')",
 		"String(url).indexOf(statsURL)===0",

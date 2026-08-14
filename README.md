@@ -11,7 +11,7 @@
 
 CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。它通过官方 `usage_plugin` 接收用量记录，将分钟级聚合、逐请求元数据、模型价格和仪表盘偏好保存到本地 bbolt 数据库，并通过 `management_api` 注册仪表盘与管理接口。
 
-插件不保存 prompt、模型响应正文或 API Key。
+插件不保存 prompt、请求正文或模型响应正文。启用 API Key 跟踪时，API Key 只以加密密文保存，并且仅在经过鉴权的完整模式中尝试解密显示。
 
 ### 主要功能
 
@@ -23,6 +23,7 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - 提供 Token 趋势、模型占比、费用趋势、模型效率和逐请求明细
 - 支持来源、认证账号、模型和请求结果筛选
 - 支持请求表和维度表分页、排序、列显示偏好持久化
+- 支持按 API Key 筛选、设置显示标签，并隔离不同加密密钥代际
 - 支持 USD/CNY 汇率展示和总 Token 完整值、k、m 单位切换
 - 自动跟随 CLIProxyAPI Management Center 主题和浏览器语言
 - 内置英文、简体中文、繁体中文和俄文
@@ -59,18 +60,19 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - 当前筛选数据 CSV 导出
 - Dashboard PNG 导出
 - bbolt 数据库备份与恢复
+- API Key 明文查看、筛选、标签管理和密钥安全状态提示
 
 完整模式会话有效期为 15 分钟。会话令牌通过 `X-Full-Mode-Session` 请求头发送，不写入数据库；退出完整模式时会主动撤销。页面导航时使用 URL fragment 临时传递令牌，加载后立即从地址栏清除。管理密钥不作为后续操作的鉴权凭据保存在前端，价格、导出、备份和恢复直接使用当前内存中的会话令牌。
 
-完整模式 HTML 本身不嵌入受保护数据。后续新增敏感数据时，必须由带 `X-Full-Mode-Session` 鉴权的资源接口按需返回，不能写进普通模式 HTML、普通资源响应或前端静态脚本。仅通过 CSS 隐藏元素不能保护敏感数据。
+完整模式 HTML 本身不嵌入受保护数据。API Key 明文、标签和密钥安全状态由带 `X-Full-Mode-Session` 鉴权的资源接口按需返回，不能写进普通模式 HTML、普通资源响应或前端静态脚本。仅通过 CSS 隐藏元素不能保护敏感数据。
 
-当前普通模式和完整模式共享现有统计数据源；完整模式的受保护数据接口已预留，但当前不返回额外敏感业务数据。
+普通模式和完整模式共享统计数据源，但普通模式会删除 API Key 明文、引用、指纹、加密代际和解密状态。完整模式会根据当前配置的 `api_key_secret` 逐项解密；无法解密的历史密文显示“明文不可用”，不会影响其他统计数据。
 
 ### 隐私与安全边界
 
-插件不会持久化或通过统计接口返回：
+插件不会持久化：
 
-- API Key
+- API Key 明文
 - Auth ID 或 Auth Index 原始值
 - prompt、请求正文或模型响应正文
 - 失败响应正文和响应头
@@ -79,11 +81,16 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 
 - 分钟级聚合维度和计数
 - 逐请求时间、模型、来源、服务层级、结果、延迟、推理强度和 Token 计数
+- API Key 加密密文、带密钥指纹、加密代际和用户设置的显示标签
 - 经过清理的认证账号显示信息
 - 模型价格、Context Tier、服务层级价格和同步元数据
 - 仪表盘时间范围、分页大小和隐藏列偏好
 
 来源字段会进行凭据清理。疑似 API Key、Bearer Token 或其他凭据形式的来源不会按原值保存；插件会尽量回退到规范化的提供商服务地址。
+
+API Key 跟踪默认使用公开密钥 `123456`。该默认值只能提供误显示防护，任何获得数据库或备份的人都可以使用它解密其中保存的 API Key；完整模式会持续显示安全警告。生产环境应配置至少 32 字节的自定义 `api_key_secret`。成功应用自定义密钥后，警告会在重新打开完整模式、手动刷新或下一次 15 秒自动刷新时消失。
+
+更换 `api_key_secret` 不会删除数据库或历史统计，而是创建或激活对应的加密代际。当前密钥无法解密的旧代 API Key 显示“明文不可用”；切回对应旧密钥后可以再次读取。将 `api_key_secret` 设为空字符串会禁用 API Key 跟踪，之后收到的记录不会保存 API Key 密文或指纹。
 
 普通模式统计资源无需再次输入管理密钥，因此任何能访问 CLIProxyAPI Management Center 的浏览器都可以读取这些非敏感统计数据。不要将 Management Center 直接暴露到不受信任网络。完整模式入口由管理密钥保护，但它不能替代 TLS、网络访问控制和宿主 Management API 安全配置。
 
@@ -112,6 +119,7 @@ plugins:
       flush_interval: 5s
       flush_max_records: 100
       sync_on_record: true
+      api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
 ```
 
 | 字段 | 默认值 | 说明 |
@@ -121,6 +129,9 @@ plugins:
 | `flush_interval` | `5s` | 批量模式最长刷盘间隔，范围 1 秒-1 小时 |
 | `flush_max_records` | `100` | 批量模式达到该记录数时立即刷盘，范围 1-1000000 |
 | `sync_on_record` | `true` | 每条记录提交数据库后再确认；设为 `false` 时启用批量模式 |
+| `api_key_secret` | `123456` | API Key 加密和带密钥指纹使用的密钥；自定义值至少 32 字节，空字符串禁用 API Key 跟踪 |
+
+示例中的 `api_key_secret` 只是占位符，部署时必须替换。含 `#`、`:`、`{}` 等特殊字符的值应使用 YAML 引号包裹；长度按 UTF-8 字节计算。该密钥会保存在 CLIProxyAPI 配置中，因此应限制配置文件权限，避免提交到公开仓库，也不要与数据库备份一起分发。
 
 默认 `sync_on_record: true` 优先保证记录持久化。设为 `false` 可以减少写入次数，但进程被强制终止时，最多可能丢失一个 `flush_interval` 或尚未达到 `flush_max_records` 的窗口。
 
@@ -189,6 +200,7 @@ plugins:
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-dashboard` | 独立完整模式页面壳 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/data` | 校验会话并返回受保护数据 |
+| `PUT` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | 保存或删除 API Key 显示标签 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/session/revoke` | 撤销当前会话 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices` | 读取受保护价格配置 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/save` | 分段保存价格配置 |
@@ -214,7 +226,7 @@ X-Full-Mode-Session: <session-token>
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | 下载数据库备份 |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | 恢复数据库 |
 
-统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source`、`auth_provider`、`auth_account` 等筛选参数。逐请求接口还支持 `offset`、`limit`、`model` 和 `result`。
+统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source`、`auth_provider`、`auth_account` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。
 
 重置请求正文：
 
@@ -283,7 +295,7 @@ go vet ./...
 
 CAP Token Usage Tracker is a persistent token-usage statistics plugin for CLIProxyAPI. It receives usage records through the official `usage_plugin`, stores minute-level aggregates, per-request metadata, model prices, and dashboard preferences in a local bbolt database, and registers dashboard and management endpoints through `management_api`.
 
-The plugin does not store prompts, model response bodies, or API keys.
+The plugin does not store prompts, request bodies, or model response bodies. When API-key tracking is enabled, API keys are persisted only as encrypted ciphertext and are revealed only when possible in authenticated full mode.
 
 ### Features
 
@@ -295,6 +307,7 @@ The plugin does not store prompts, model response bodies, or API keys.
 - Token trends, model share, cost trends, model efficiency, and paginated request details
 - Source, authenticated-account, model, and request-result filters
 - Persistent table pagination, sorting, and column visibility preferences
+- API-key filtering, display labels, and isolation between encryption-key generations
 - USD/CNY display and full, k, or m total-token units
 - Automatic Management Center theme and browser-language synchronization
 - Built-in English, Simplified Chinese, Traditional Chinese, and Russian locales
@@ -326,25 +339,30 @@ Full mode keeps the same dashboard layout and statistics while adding:
 - models.dev synchronization
 - Filtered CSV and Dashboard PNG export
 - bbolt database backup and restore
+- API-key reveal, filtering, label management, and secret-security status
 
 The full-mode session lasts 15 minutes. The capability is sent in the `X-Full-Mode-Session` header, is not persisted to the database, and is revoked when Full Mode is exited. Navigation temporarily carries it in the URL fragment, which is removed immediately after page initialization. The management key is not retained for later operations; pricing, export, backup, and restore use the current in-memory capability.
 
-The full-mode HTML does not embed protected data. Future sensitive fields must be returned only by capability-protected resource endpoints. They must not be included in normal-mode HTML, normal resource responses, or static frontend scripts. CSS visibility is not a security boundary.
+The full-mode HTML does not embed protected data. API-key plaintext, labels, and secret-security status are returned on demand only by capability-protected resource endpoints. They are not included in normal-mode HTML, normal resource responses, or static frontend scripts. CSS visibility is not a security boundary.
 
-The current normal and full modes share the existing statistics source. A protected full-mode data endpoint is reserved for future use, but the current release does not return additional sensitive business data.
+Normal and full modes share the same statistics source, but normal mode removes API-key plaintext, references, fingerprints, encryption generations, and reveal statuses. Full mode attempts item-by-item decryption with the configured `api_key_secret`; historical ciphertext that cannot be decrypted is shown as "Plaintext unavailable" without affecting other statistics.
 
 ### Privacy and Security Boundary
 
-The plugin does not persist or return through statistics endpoints:
+The plugin does not persist:
 
-- API keys
+- Plaintext API keys
 - Raw Auth ID or Auth Index values
 - Prompts, request bodies, or model response bodies
 - Failure response bodies or response headers
 
-The database contains minute-level aggregates, per-request operational metadata, sanitized authenticated-account display data, model pricing and synchronization metadata, and dashboard preferences.
+The database contains minute-level aggregates, per-request operational metadata, encrypted API-key ciphertext, keyed fingerprints, encryption-generation metadata, user-defined API-key labels, sanitized authenticated-account display data, model pricing and synchronization metadata, and dashboard preferences.
 
 Source fields are credential-sanitized. Values that resemble API keys, bearer tokens, or other credentials are not persisted verbatim; the plugin falls back to a normalized provider service address when possible.
+
+API-key tracking defaults to the public secret `123456`. This default only prevents accidental display: anyone who obtains the database or a backup can use it to decrypt stored API keys, so full mode continuously shows a security warning. Production deployments should configure a custom `api_key_secret` of at least 32 bytes. After the custom secret is successfully applied, the warning disappears when full mode is reopened, manually refreshed, or automatically refreshed within 15 seconds.
+
+Changing `api_key_secret` does not delete the database or historical statistics. It creates or activates the matching crypto generation. API keys from generations unavailable under the current secret are shown as "Plaintext unavailable" and become readable again after switching back to the matching older secret. Setting `api_key_secret` to an empty string disables API-key tracking for subsequently received records.
 
 Normal-mode statistics resources do not ask for the management key again, so any browser that can access the CLIProxyAPI Management Center can read these non-sensitive statistics. Do not expose the Management Center directly to untrusted networks. Full-mode entry is protected by the management key, but this does not replace TLS, network access controls, or secure host Management API configuration.
 
@@ -373,6 +391,7 @@ plugins:
       flush_interval: 5s
       flush_max_records: 100
       sync_on_record: true
+      api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
 ```
 
 | Field | Default | Description |
@@ -382,6 +401,9 @@ plugins:
 | `flush_interval` | `5s` | Maximum batch-mode flush interval, from 1 second to 1 hour |
 | `flush_max_records` | `100` | Flush after this many batched records, from 1 to 1000000 |
 | `sync_on_record` | `true` | Commit each record before acknowledgment; set to `false` for batch mode |
+| `api_key_secret` | `123456` | Secret used for API-key encryption and keyed fingerprints; custom values must be at least 32 bytes, and an empty string disables API-key tracking |
+
+The `api_key_secret` in the example is a placeholder and must be replaced for deployment. Quote YAML values containing special characters such as `#`, `:`, or `{}`; the minimum length is measured in UTF-8 bytes. The secret is stored in CLIProxyAPI configuration, so restrict access to that file, do not commit it to a public repository, and do not distribute it with database backups.
 
 The default `sync_on_record: true` prioritizes durability. With batch mode enabled, a forced process termination may lose up to one `flush_interval` or the records below the `flush_max_records` threshold.
 
@@ -436,6 +458,7 @@ Full-mode resources:
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-dashboard` | Separate full-mode page shell |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/data` | Validate the session and return protected data |
+| `PUT` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | Save or delete an API-key display label |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/session/revoke` | Revoke the active session |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices` | Read protected pricing configuration |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/save` | Persist pricing through a staged payload |
@@ -461,7 +484,7 @@ Management API routes:
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | Download a database backup |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | Restore the database |
 
-Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`, `auth_provider`, and `auth_account`. The request resource also accepts `offset`, `limit`, `model`, and `result`.
+Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`, `auth_provider`, and `auth_account`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`.
 
 Reset body:
 
