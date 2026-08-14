@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -108,6 +109,50 @@ func TestFullModeSessionProtectsFullModeResources(t *testing.T) {
 	response, err = runtime.handleManagement(validRequest)
 	if err != nil || response.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expired full-mode session response: %+v, %v", response, err)
+	}
+}
+
+func TestFullModeDefaultSecretWarningTracksSuccessfulReconfigure(t *testing.T) {
+	config := testConfig(t)
+	runtime := &pluginRuntime{}
+	defer runtime.shutdown()
+	lifecyclePayload := func(secret string) []byte {
+		configYAML := []byte("data_path: " + filepath.ToSlash(config.DataPath) + "\napi_key_secret: " + strconv.Quote(secret) + "\n")
+		payload, err := json.Marshal(lifecycleRequest{ConfigYAML: configYAML, SchemaVersion: 3})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return payload
+	}
+	if _, err := runtime.register(lifecyclePayload(defaultAPIKeySecret)); err != nil {
+		t.Fatal(err)
+	}
+	registration, _ := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
+	if _, err := runtime.registerManagement(registration); err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, _ := json.Marshal(pluginapi.ManagementRequest{
+		Method:  http.MethodGet,
+		Path:    runtime.routes.fullModeDataPath,
+		Headers: http.Header{"X-Full-Mode-Session": []string{session}},
+	})
+
+	response, err := runtime.handleManagement(request)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"api_key_uses_default_secret":true`) {
+		t.Fatalf("default-secret full-mode data = %+v, %v", response, err)
+	}
+
+	customSecret := strings.Repeat("custom-secret-", 3)
+	if _, err := runtime.reconfigure(lifecyclePayload(customSecret)); err != nil {
+		t.Fatal(err)
+	}
+	response, err = runtime.handleManagement(request)
+	if err != nil || response.StatusCode != http.StatusOK || !strings.Contains(string(response.Body), `"api_key_uses_default_secret":false`) {
+		t.Fatalf("custom-secret full-mode data = %+v, %v", response, err)
 	}
 }
 
