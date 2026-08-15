@@ -176,8 +176,15 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 	filterQuery := url.Values{"range": {"24h"}, "api_key_ref": {refA}}
 	filteredStats := call(runtime.routes.resourceStatsPath, filterQuery, session)
 	var filtered StatsResponse
-	if filteredStats.StatusCode != http.StatusOK || json.Unmarshal(filteredStats.Body, &filtered) != nil || filtered.Summary.Requests != 2 || len(filtered.APIKeys) != 1 || filtered.APIKeys[0].Key != keyA {
+	if filteredStats.StatusCode != http.StatusOK || json.Unmarshal(filteredStats.Body, &filtered) != nil || filtered.Summary.Requests != 2 || len(filtered.APIKeys) != 2 {
 		t.Fatalf("filtered stats: status=%d body=%s", filteredStats.StatusCode, filteredStats.Body)
+	}
+	filteredOptionKeys := map[string]bool{}
+	for _, option := range filtered.APIKeys {
+		filteredOptionKeys[option.Key] = true
+	}
+	if !filteredOptionKeys[keyA] || !filteredOptionKeys[keyB] {
+		t.Fatalf("filtered stats options = %+v", filtered.APIKeys)
 	}
 	filteredRequests := call(runtime.routes.resourceRequestsPath, filterQuery, session)
 	var filteredPage RequestPage

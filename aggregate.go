@@ -328,11 +328,11 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		if dimensions.AuthProvider != "" && dimensions.AuthAccount != "" {
 			identities[usageIdentity{Provider: dimensions.AuthProvider, Account: dimensions.AuthAccount}] = struct{}{}
 		}
-		if !filter.matches(dimensions) {
-			continue
-		}
 		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
 			apiKeyRefs[ref] = struct{}{}
+		}
+		if !filter.matches(dimensions) {
+			continue
 		}
 		group := groups[dimensions]
 		group.add(counters)
@@ -635,11 +635,11 @@ func buildInitialStatsForRange(data map[aggregateKey]Counters, since, lastUsed t
 		if dimensions.AuthProvider != "" && dimensions.AuthAccount != "" {
 			identities[usageIdentity{Provider: dimensions.AuthProvider, Account: dimensions.AuthAccount}] = struct{}{}
 		}
-		if !filter.matches(dimensions) {
-			continue
-		}
 		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
 			apiKeyRefs[ref] = struct{}{}
+		}
+		if !filter.matches(dimensions) {
+			continue
 		}
 		seriesKey := compactBucket(key.Hour, bucketSeconds)
 		point := series[seriesKey]
