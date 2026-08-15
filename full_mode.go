@@ -244,18 +244,33 @@ func (r *pluginRuntime) setAPIKeyLabelResponse(request pluginapi.ManagementReque
 	if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
 		return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
 	}
-	if len(request.Body) > 16<<10 {
-		return jsonResponse(http.StatusRequestEntityTooLarge, map[string]string{"error": "API key label JSON is too large"}), nil
-	}
-	if !utf8.Valid(request.Body) {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "API key label JSON must be valid UTF-8"}), nil
-	}
 	var input struct {
 		Ref   string `json:"ref"`
 		Label string `json:"label"`
 	}
-	if err := decodeStrictJSON(request.Body, &input); err != nil {
-		return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid API key label JSON"}), nil
+	if strings.EqualFold(request.Method, http.MethodGet) {
+		refs, labels := request.Query["ref"], request.Query["label"]
+		if len(refs) == 1 && len(labels) == 1 {
+			input.Ref, input.Label = refs[0], labels[0]
+		} else {
+			body := []byte(request.Headers.Get("X-API-Key-Label"))
+			if len(body) == 0 {
+				return jsonResponse(http.StatusBadRequest, map[string]string{"error": "API key label query requires exactly one ref and label"}), nil
+			}
+			if len(body) > 16<<10 || !utf8.Valid(body) || decodeStrictJSON(body, &input) != nil {
+				return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid API key label JSON"}), nil
+			}
+		}
+	} else {
+		if len(request.Body) > 16<<10 {
+			return jsonResponse(http.StatusRequestEntityTooLarge, map[string]string{"error": "API key label JSON is too large"}), nil
+		}
+		if !utf8.Valid(request.Body) {
+			return jsonResponse(http.StatusBadRequest, map[string]string{"error": "API key label JSON must be valid UTF-8"}), nil
+		}
+		if err := decodeStrictJSON(request.Body, &input); err != nil {
+			return jsonResponse(http.StatusBadRequest, map[string]string{"error": "invalid API key label JSON"}), nil
+		}
 	}
 	if err := validateAPIKeyLabel(input.Ref, input.Label); err != nil {
 		return jsonResponse(http.StatusBadRequest, map[string]string{"error": err.Error()}), nil

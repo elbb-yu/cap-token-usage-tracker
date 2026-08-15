@@ -215,7 +215,7 @@ plugins:
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-dashboard` | 独立完整模式页面壳 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/data` | 校验会话并返回受保护数据 |
-| `PUT` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | 保存或删除 API Key 显示标签 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | 通过 `X-API-Key-Label` JSON 请求头保存或删除 API Key 显示标签 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/session/revoke` | 撤销当前会话 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices` | 读取受保护价格配置 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/save` | 分段保存价格配置 |
@@ -487,7 +487,7 @@ Full-mode resources:
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-dashboard` | Separate full-mode page shell |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/data` | Validate the session and return protected data |
-| `PUT` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | Save or delete an API-key display label |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | Save or delete an API-key display label with an `X-API-Key-Label` JSON request header |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/session/revoke` | Revoke the active session |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices` | Read protected pricing configuration |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/save` | Persist pricing through a staged payload |

@@ -144,7 +144,7 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 			},
 			{Path: "/full-dashboard", Description: "Full-mode dashboard shell without protected data."},
 			{Path: "/full-mode/data", Description: "Capability-protected full-mode data."},
-			{Path: "/full-mode/api-key-labels", Description: "Capability-protected API key label management."},
+			{Path: "/full-mode/api-key-labels", Description: "Capability-protected API key label management. Send JSON in the X-API-Key-Label header with GET requests."},
 			{Path: "/full-mode/session/revoke", Description: "Revoke a full-mode capability."},
 			{Path: "/full-mode/prices", Description: "Capability-protected model prices."},
 			{Path: "/full-mode/prices/save", Description: "Capability-protected model price save."},
@@ -224,8 +224,10 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 		}
 		return r.fullModeDataResponse(request)
 	case routes.fullModeAPIKeyLabelsPath:
-		if !strings.EqualFold(request.Method, http.MethodPut) {
-			return methodNotAllowed(http.MethodPut), nil
+		// Resource routes are dispatched by the host as GET. Keep PUT support
+		// for direct/plugin-level callers and newer hosts.
+		if !strings.EqualFold(request.Method, http.MethodGet) && !strings.EqualFold(request.Method, http.MethodPut) {
+			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.setAPIKeyLabelResponse(request)
 	case routes.fullModeSessionRevokePath:

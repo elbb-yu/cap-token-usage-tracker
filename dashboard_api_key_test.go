@@ -47,6 +47,7 @@ func TestAPIKeyDashboardIsFullModeOnly(t *testing.T) {
 		"String(url).indexOf(requestsURL)===0",
 		"String(url).indexOf(costsURL)===0",
 		"'X-Full-Mode-Session':fullModeSession",
+		"'X-API-Key-Label':JSON.stringify({ref:editingAPIKeyRef,label:value})",
 	} {
 		if !strings.Contains(fullDashboardHTML, required) {
 			t.Fatalf("full dashboard missing API-key contract %q", required)

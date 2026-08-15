@@ -88,13 +88,20 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 	if response := call(http.MethodPut, validBody, true); response.StatusCode != http.StatusOK {
 		t.Fatalf("save status = %d body=%s", response.StatusCode, response.Body)
 	}
+	getHeaders := http.Header{"X-Full-Mode-Session": []string{session}}
+	getHeaders.Set("X-API-Key-Label", `{"ref":"`+ref+`","label":"GET client"}`)
+	getRaw, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: runtime.routes.fullModeAPIKeyLabelsPath, Headers: getHeaders})
+	getResponse, getErr := runtime.handleManagement(getRaw)
+	if getErr != nil || getResponse.StatusCode != http.StatusOK {
+		t.Fatalf("GET save status = %d body=%s err=%v", getResponse.StatusCode, getResponse.Body, getErr)
+	}
 	labels, err := store.APIKeyLabels()
-	if err != nil || labels[ref] != "Primary client" {
+	if err != nil || labels[ref] != "GET client" {
 		t.Fatalf("labels = %+v, %v", labels, err)
 	}
 	labels[ref] = "mutated by caller"
 	fresh, err := store.APIKeyLabels()
-	if err != nil || fresh[ref] != "Primary client" {
+	if err != nil || fresh[ref] != "GET client" {
 		t.Fatalf("actor label map was not cloned: %+v, %v", fresh, err)
 	}
 
@@ -107,7 +114,7 @@ func TestAPIKeyLabelResourceValidationAndPersistence(t *testing.T) {
 	}
 	runtime.store = store
 	fresh, err = store.APIKeyLabels()
-	if err != nil || fresh[ref] != "Primary client" {
+	if err != nil || fresh[ref] != "GET client" {
 		t.Fatalf("reloaded labels = %+v, %v", fresh, err)
 	}
 
