@@ -273,7 +273,7 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`params.set('sort',dimensionSortKey)`,
 		`renderGroups(page.items,Number(page.total||0))`,
 		`empty.colSpan=Math.max(1,columns.length)`,
-		`function zoomTrend(factor,anchorRatio)`,
+		`function zoomTrend(points,zoom,factor,anchorRatio,render)`,
 		`{passive:false,capture:true}`,
 		`生成时间`,
 		`缓存命中`,
@@ -323,6 +323,54 @@ func TestDashboardTrendKeepsContinuousTimeBuckets(t *testing.T) {
 	}
 	if strings.Contains(html, `return capSeries(result);`) {
 		t.Fatal("continuous time buckets must not be downsampled because that would skip empty intervals")
+	}
+}
+
+func TestDashboardRefreshPreservesTrendZoom(t *testing.T) {
+	html := dashboardHTML
+	if !strings.Contains(html, "function startTimer(){if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(function(){load().catch") {
+		t.Fatal("dashboard must retain its automatic refresh path")
+	}
+	if strings.Contains(html, "if(costLoadError)text('error',t('error.costUnavailable',{message:costLoadError}));resetTrendZooms();renderRequestFilters()") {
+		t.Fatal("dashboard render must not reset either trend zoom during a refresh")
+	}
+	for _, required := range []string{
+		"function confirmDateRange(){",
+		"updateGranularityForRange();resetTrendZooms();",
+		"document.getElementById('granularity').addEventListener('change',function(){resetTrendZooms();renderVisuals();})",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard must still reset both trend zooms when their data scope changes: %q", required)
+		}
+	}
+}
+
+func TestDashboardTrendZoomsAreIndependent(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		"tokenTrendZoom={start:0,size:0},costTrendZoom={start:0,size:0}",
+		"function resetTrendZooms(){resetTrendZoom(tokenTrendZoom);resetTrendZoom(costTrendZoom);}",
+		"function renderBar(){var svg=document.getElementById('chart'),fragment=document.createDocumentFragment(),all=aggregateTrend(),series=visibleTrend(all,tokenTrendZoom)",
+		"function renderCostTrend(){var svg=document.getElementById('costChart'),fragment=document.createDocumentFragment(),all=currentCosts?aggregateCostSeries():[];lastCostTrend=all;var series=trendWindow(all,costTrendZoom)",
+		`id="costZoomOutButton"`,
+		`id="costZoomInButton"`,
+		`id="costResetZoomButton"`,
+		`id="costWrap"`,
+		"document.getElementById('zoomInButton').addEventListener('click',function(){zoomTrend(lastTrend,tokenTrendZoom,.7,.5,renderBar);})",
+		"document.getElementById('costZoomInButton').addEventListener('click',function(){zoomTrend(lastCostTrend,costTrendZoom,.7,.5,renderCostTrend);})",
+		"document.getElementById('barWrap').addEventListener('wheel',function(event){if(lastTrend.length<2)return;",
+		"zoomTrend(lastTrend,tokenTrendZoom,factor,ratio,renderBar);",
+		"document.getElementById('costWrap').addEventListener('wheel',function(event){if(lastCostTrend.length<2)return;",
+		"zoomTrend(lastCostTrend,costTrendZoom,factor,ratio,renderCostTrend);",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard missing independent trend zoom behavior %q", required)
+		}
+	}
+	for _, forbidden := range []string{"barZoomStart", "barZoomSize"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("dashboard must not retain shared trend zoom behavior %q", forbidden)
+		}
 	}
 }
 
