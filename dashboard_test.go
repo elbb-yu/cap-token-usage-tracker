@@ -161,7 +161,7 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`function cacheReadTokens(point)`,
 		`function cacheHitRate(input,cacheRead)`,
 		`bucket.cacheRead+=cacheReadTokens(point)`,
-		`item.cacheHitRate=cacheHitRate(item.input,item.cacheRead)`,
+		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
 		`pointStackTotal(point)`,
 		`t('trend.cacheHitRate')`,
 		`model_series`,
@@ -295,11 +295,34 @@ func TestDashboardCacheHitRateUsesInputTokenDenominator(t *testing.T) {
 	for _, required := range []string{
 		`function cacheReadTokens(point){var cacheRead=Number(point.cache_read_tokens||0);return cacheRead>0?cacheRead:Number(point.cached_tokens||0);}`,
 		`bucket.cacheRead+=cacheReadTokens(point)`,
-		`item.cacheHitRate=cacheHitRate(item.input,item.cacheRead)`,
+		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
 	} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("dashboardHTML missing cache hit rate aggregation %q", required)
 		}
+	}
+}
+
+func TestDashboardTrendKeepsContinuousTimeBuckets(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		`function nextBucketInfo(info,granularity)`,
+		`function continuousBuckets(map,granularity,emptyBucket)`,
+		`var range=resolvedDateRange(),start=bucketInfo(range.start,granularity),end=bucketInfo(new Date(range.end.getTime()-1),granularity)`,
+		`while(info.stamp<=end.stamp&&steps<100000)`,
+		`function emptyTrendBucket(info){return {key:info.key,label:info.label,stamp:info.stamp,hasData:false`,
+		`function emptyCostBucket(info){return {key:info.key,label:info.label,stamp:info.stamp,hasData:false`,
+		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
+		`if(showCacheHit&&point.hasData&&point.cacheHitRate!==null)`,
+		`item.index===previousIndex+1?'L':'M'`,
+		`if(!point.hasData){tooltipRow(t('chart.noRequests'),t('locale.unavailable'));`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard missing continuous time-series behavior %q", required)
+		}
+	}
+	if strings.Contains(html, `return capSeries(result);`) {
+		t.Fatal("continuous time buckets must not be downsampled because that would skip empty intervals")
 	}
 }
 
@@ -1002,6 +1025,7 @@ func TestDashboardLocalesCatalog(t *testing.T) {
 		"backup.fileTooLarge",
 		"status.loading",
 		"chart.noCalls",
+		"chart.noRequests",
 		"trend.cacheHitRate",
 		"sourceFilter.label",
 		"sourceFilter.all",
