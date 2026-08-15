@@ -57,6 +57,31 @@ func TestAPIKeyDashboardIsFullModeOnly(t *testing.T) {
 	}
 }
 
+func TestAPIKeyFilterIsRenderedBesideSourceFilter(t *testing.T) {
+	if strings.Contains(fullDashboardHTML, "/*FULL_MODE_APIKEY_FILTER*/") {
+		t.Fatal("full dashboard contains unresolved API-key filter placeholder")
+	}
+	granularityIndex := strings.Index(fullDashboardHTML, `id="granularity"`)
+	apiKeyIndex := strings.Index(fullDashboardHTML, `id="apiKeyFilter"`)
+	if granularityIndex < 0 || apiKeyIndex < 0 || apiKeyIndex < granularityIndex {
+		t.Fatal("API-key filter is not rendered after the aggregation filter")
+	}
+	if strings.Contains(fullDashboardHTML, `class="apikey-controls"`) && strings.Contains(fullDashboardHTML, `id="apiKeyFilter"`) {
+		controlsIndex := strings.Index(fullDashboardHTML, `class="apikey-controls"`)
+		if controlsIndex < apiKeyIndex {
+			t.Fatal("API-key filter remains inside the standalone controls panel")
+		}
+	}
+	for _, required := range []string{
+		`granularity.insertAdjacentElement('afterend',select)`,
+		`select.id='sourceFilter'`,
+	} {
+		if !strings.Contains(fullDashboardHTML, required) {
+			t.Fatalf("full dashboard missing source-filter placement contract %q", required)
+		}
+	}
+}
+
 func TestAPIKeyLocaleCatalog(t *testing.T) {
 	required := []string{
 		"table.apiKey", "apiKey.filter", "apiKey.all", "apiKey.editLabel",
