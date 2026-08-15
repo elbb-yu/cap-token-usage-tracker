@@ -114,7 +114,7 @@ func TestExactCustomStatsUseRequestBoundariesAndSourceFilter(t *testing.T) {
 	}
 }
 
-func TestAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
+func TestSourceFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
 	config := testConfig(t)
 	config.SyncOnRecord = true
 	store, err := openStore(config)
@@ -124,21 +124,21 @@ func TestAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T
 	defer store.Close()
 	now := nowUTC().Add(-time.Minute)
 	for _, usage := range []normalizedUsage{
-		{Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}, RequestedAt: now, Counters: Counters{Requests: 1, InputTokens: 2, TotalTokens: 2}},
-		{Dimensions: Dimensions{Model: "beta", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}, RequestedAt: now.Add(time.Second), Counters: Counters{Requests: 1, InputTokens: 4, TotalTokens: 4}},
+		{Dimensions: Dimensions{Model: "alpha", Source: "Codex-user@example.com"}, RequestedAt: now, Counters: Counters{Requests: 1, InputTokens: 2, TotalTokens: 2}},
+		{Dimensions: Dimensions{Model: "beta", Source: "Antigravity-user@example.com"}, RequestedAt: now.Add(time.Second), Counters: Counters{Requests: 1, InputTokens: 4, TotalTokens: 4}},
 	} {
 		if err := store.Record(usage); err != nil {
 			t.Fatal(err)
 		}
 	}
 	queryRange := usageRange{Name: "24h", Start: now.Add(-time.Hour)}
-	filter := newUsageFilter("cli", "Codex", "user@example.com", "")
+	filter := newUsageFilter("Codex-user@example.com", "")
 	stats, err := store.queryStatsByFilter(queryRange, filter)
-	if err != nil || stats.Summary.Requests != 1 || stats.Summary.TotalTokens != 2 || len(stats.AuthIdentities) != 2 {
+	if err != nil || stats.Summary.Requests != 1 || stats.Summary.TotalTokens != 2 || len(stats.Sources) != 2 {
 		t.Fatalf("filtered stats = %+v, %v", stats, err)
 	}
 	page, err := store.queryRequestPageByFilter(queryRange, 0, 100, "", filter, "")
-	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].AuthProvider != "Codex" {
+	if err != nil || page.Total != 1 || len(page.Items) != 1 || page.Items[0].Source != "Codex-user@example.com" {
 		t.Fatalf("filtered request page = %+v, %v", page, err)
 	}
 	costs, err := store.queryCostsByFilter(queryRange, filter)
@@ -869,6 +869,173 @@ func TestSchemaFourUsageSourcesMigrateWithoutAPIKeys(t *testing.T) {
 							return nil
 						})
 					}
+				}
+				return nil
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSchemaEightUsageSourcesMigrateAuthenticationIdentity(t *testing.T) {
+	config := testConfig(t)
+	db, err := bolt.Open(config.DataPath, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Add(-time.Minute)
+	type legacyDimensions struct {
+		Dimensions
+		AuthProvider string `json:"auth_provider"`
+		AuthAccount  string `json:"auth_account"`
+	}
+	type legacyRequestDetail struct {
+		Sequence uint64    `json:"sequence"`
+		Time     time.Time `json:"time"`
+		legacyDimensions
+		Counters
+		Result string `json:"result"`
+	}
+	compatible := legacyDimensions{Dimensions: Dimensions{
+		Provider: "openai-compatible-牛",
+		Model:    "gpt-compatible",
+		Source:   "openai-compatible-牛",
+	}}
+	antigravity := legacyDimensions{Dimensions: Dimensions{
+		Provider: "antigravity",
+		Model:    "gpt-antigravity",
+		Source:   "dangngocbich07796@gmail.com",
+	}, AuthProvider: "antigravity", AuthAccount: "dangngocbich07796@gmail.com"}
+	antigravityDuplicate := antigravity
+	antigravityDuplicate.Source = "legacy-dangngocbich07796@gmail.com"
+	entries := []struct {
+		dimensions legacyDimensions
+		counters   Counters
+	}{
+		{dimensions: compatible, counters: Counters{Requests: 1, InputTokens: 2, TotalTokens: 2}},
+		{dimensions: antigravity, counters: Counters{Requests: 2, InputTokens: 3, TotalTokens: 3}},
+		{dimensions: antigravityDuplicate, counters: Counters{Requests: 3, InputTokens: 5, TotalTokens: 5}},
+	}
+	if err := db.Update(func(tx *bolt.Tx) error {
+		meta, err := tx.CreateBucket(metaBucket)
+		if err != nil {
+			return err
+		}
+		if err := meta.Put(schemaKey, encodeUint64(8)); err != nil {
+			return err
+		}
+		if err := meta.Put(sinceKey, encodeInt64(now.Add(-time.Hour).UnixNano())); err != nil {
+			return err
+		}
+		if err := meta.Put(requestSequenceKey, encodeUint64(uint64(len(entries)))); err != nil {
+			return err
+		}
+		hours, err := tx.CreateBucket(hoursBucket)
+		if err != nil {
+			return err
+		}
+		hour, err := hours.CreateBucket(encodeInt64(now.Truncate(time.Minute).Unix()))
+		if err != nil {
+			return err
+		}
+		requests, err := tx.CreateBucket(requestsBucket)
+		if err != nil {
+			return err
+		}
+		for index, entry := range entries {
+			dimensionKey, err := json.Marshal(entry.dimensions)
+			if err != nil {
+				return err
+			}
+			counterValue, err := json.Marshal(entry.counters)
+			if err != nil {
+				return err
+			}
+			if err := hour.Put(dimensionKey, counterValue); err != nil {
+				return err
+			}
+			requestValue, err := json.Marshal(legacyRequestDetail{
+				Sequence:         uint64(index + 1),
+				Time:             now.Add(time.Duration(index) * time.Second),
+				legacyDimensions: entry.dimensions,
+				Counters:         entry.counters,
+				Result:           "success",
+			})
+			if err != nil {
+				return err
+			}
+			if err := requests.Put(encodeRequestKey(now.Add(time.Duration(index)*time.Second).UnixNano(), uint64(index+1)), requestValue); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := store.Query("retention")
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups := make(map[string]Counters, len(stats.Groups))
+	for _, group := range stats.Groups {
+		groups[group.Source] = group.Counters
+	}
+	if len(groups) != 2 || groups["牛"].Requests != 1 || groups["Antigravity-dangngocbich07796@gmail.com"].Requests != 5 {
+		t.Fatalf("migrated groups = %+v", stats.Groups)
+	}
+	page, err := store.QueryRequests("retention", 0, 100, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestSources := make(map[string]int, len(page.Items))
+	for _, item := range page.Items {
+		requestSources[item.Source]++
+	}
+	if len(page.Items) != len(entries) || requestSources["牛"] != 1 || requestSources["Antigravity-dangngocbich07796@gmail.com"] != 2 {
+		t.Fatalf("migrated requests = %+v", page.Items)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err = bolt.Open(config.DataPath, 0o600, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if err := db.View(func(tx *bolt.Tx) error {
+		if version := decodeUint64(tx.Bucket(metaBucket).Get(schemaKey)); version != persistenceSchemaVersion {
+			return fmt.Errorf("schema version = %d", version)
+		}
+		for _, bucketName := range [][]byte{hoursBucket, requestsBucket} {
+			bucket := tx.Bucket(bucketName)
+			if bucket == nil {
+				return fmt.Errorf("%s bucket is missing", bucketName)
+			}
+			if err := bucket.ForEach(func(key, value []byte) error {
+				if value == nil {
+					nested := bucket.Bucket(key)
+					return nested.ForEach(func(nestedKey, nestedValue []byte) error {
+						if bytes.Contains(nestedKey, []byte("auth_provider")) || bytes.Contains(nestedValue, []byte("auth_provider")) || bytes.Contains(nestedKey, []byte("auth_account")) || bytes.Contains(nestedValue, []byte("auth_account")) {
+							return fmt.Errorf("legacy authentication fields remain in %s", bucketName)
+						}
+						return nil
+					})
+				}
+				if bytes.Contains(key, []byte("auth_provider")) || bytes.Contains(value, []byte("auth_provider")) || bytes.Contains(key, []byte("auth_account")) || bytes.Contains(value, []byte("auth_account")) {
+					return fmt.Errorf("legacy authentication fields remain in %s", bucketName)
 				}
 				return nil
 			}); err != nil {

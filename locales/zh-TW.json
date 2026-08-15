@@ -1,7 +1,4 @@
 {
-  "identityFilter.label": "驗證身分",
-  "identityFilter.all": "全部驗證身分",
-  "table.authIdentity": "驗證身分",
   "app.title": "Token 用量統計",
   "app.eyebrow": "用量分析",
   "app.subtitle": "查看模型佔比、輸入 / 輸出 / 快取讀取 Token 趨勢、快取命中率，以及後端價格表計算的精確費用。",

@@ -194,6 +194,5 @@ func (r *pluginRuntime) resolveUsageIdentity(usage *normalizedUsage) {
 	if err != nil {
 		return
 	}
-	usage.Dimensions.AuthProvider = identity.Provider
-	usage.Dimensions.AuthAccount = identity.Account
+	usage.Dimensions.Source = canonicalUsageSourceWithIdentity(usage.Dimensions, identity.Provider, identity.Account)
 }

@@ -181,7 +181,7 @@ func (s *Store) queryCosts(queryRange usageRange) (CostResponse, error) {
 }
 
 func (s *Store) queryCostsBySource(queryRange usageRange, source string) (CostResponse, error) {
-	return s.queryCostsByFilter(queryRange, newUsageFilter(source, "", "", ""))
+	return s.queryCostsByFilter(queryRange, newUsageFilter(source, ""))
 }
 
 func (s *Store) queryCostsByFilter(queryRange usageRange, filter usageFilter) (CostResponse, error) {

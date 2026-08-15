@@ -107,8 +107,33 @@ func safeUsageSource(rawSource, apiKey, provider, executorType, authType string)
 	return normalizeDimension(source)
 }
 
+func canonicalUsageSource(dimensions Dimensions) string {
+	return canonicalUsageSourceWithIdentity(dimensions, "", "")
+}
+
+func canonicalUsageSourceWithIdentity(dimensions Dimensions, authProvider, authAccount string) string {
+	source := safeUsageSource(dimensions.Source, "", dimensions.Provider, dimensions.ExecutorType, dimensions.AuthType)
+	if provider, account := displayAuthProvider(authProvider), safeAuthAccount(authAccount); provider != "" && account != "" {
+		return normalizeDimension(provider + "-" + account)
+	}
+	if isOpenAICompatibleProvider(dimensions.Provider, dimensions.ExecutorType) {
+		const prefix = "openai-compatible-"
+		if strings.HasPrefix(strings.ToLower(source), prefix) {
+			if name := normalizeDimension(source[len(prefix):]); name != "" {
+				return name
+			}
+		}
+	}
+	return source
+}
+
+func isOpenAICompatibleProvider(provider, executorType string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	executorType = strings.ToLower(strings.TrimSpace(executorType))
+	return strings.HasPrefix(provider, "openai-compatible-") || provider == "openai-compatibility" || executorType == "openaicompatexecutor"
+}
 func sanitizeDimensionsSource(dimensions Dimensions) Dimensions {
-	dimensions.Source = safeUsageSource(dimensions.Source, "", dimensions.Provider, dimensions.ExecutorType, dimensions.AuthType)
+	dimensions.Source = canonicalUsageSource(dimensions)
 	return dimensions
 }
 

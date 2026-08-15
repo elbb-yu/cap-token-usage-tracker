@@ -242,7 +242,7 @@ X-Full-Mode-Session: <session-token>
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | 下载数据库备份 |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | 恢复数据库 |
 
-统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source`、`auth_provider`、`auth_account` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。`/stats/groups` 另支持 `offset`、`limit`、`sort`、`direction`、`model` 和重复的 `exclude_model`；每页最多 500 条。
+统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。`/stats/groups` 另支持 `offset`、`limit`、`sort`、`direction`、`model` 和重复的 `exclude_model`；每页最多 500 条。
 
 重置请求正文：
 
@@ -321,7 +321,7 @@ The plugin does not store prompts, request bodies, or model response bodies. Whe
 - Today, last 5 hours, last 7 days, last 30 days, current month, and custom local date-time ranges
 - Minute, hour, day, week, and month trend aggregation with wheel zoom and pan
 - Token trends, model share, cost trends, model efficiency, and paginated request details
-- Source, authenticated-account, model, and request-result filters
+- Source, model, and request-result filters
 - Persistent table pagination, sorting, and column visibility preferences
 - API-key filtering, display labels, and isolation between encryption-key generations
 - USD/CNY display and full, k, or m total-token units
@@ -376,7 +376,7 @@ The plugin does not persist:
 - Prompts, request bodies, or model response bodies
 - Failure response bodies or response headers
 
-The database contains minute-level aggregates, per-request operational metadata, encrypted API-key ciphertext, keyed fingerprints, encryption-generation metadata, user-defined API-key labels, sanitized authenticated-account display data, model pricing and synchronization metadata, and dashboard preferences.
+The database contains minute-level aggregates, per-request operational metadata, encrypted API-key ciphertext, keyed fingerprints, encryption-generation metadata, user-defined API-key labels, sanitized source display data, model pricing and synchronization metadata, and dashboard preferences.
 
 Source fields are credential-sanitized. Values that resemble API keys, bearer tokens, or other credentials are not persisted verbatim; the plugin falls back to a normalized provider service address when possible.
 
@@ -442,7 +442,7 @@ Without an explicit `data_path`, the plugin resolves the database in this order:
 
 ### Dashboard Operations
 
-Both modes support preset or custom date-time ranges, source and authenticated-account filtering, trend granularity and zoom, model drill-down, token and currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and preset/custom table page sizes. Statistics reset is available only in full mode and requires the active session plus explicit confirmation.
+Both modes support preset or custom date-time ranges, source filtering, trend granularity and zoom, model drill-down, token and currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and preset/custom table page sizes. Statistics reset is available only in full mode and requires the active session plus explicit confirmation.
 
 Table preferences and the selected range are stored in the plugin database. Custom browser-local times are converted to UTC RFC3339 timestamps for requests.
 
@@ -514,7 +514,7 @@ Management API routes:
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | Download a database backup |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | Restore the database |
 
-Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`, `auth_provider`, and `auth_account`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`. `/stats/groups` additionally accepts `offset`, `limit`, `sort`, `direction`, `model`, and repeated `exclude_model`; pages are limited to 500 rows.
+Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`. `/stats/groups` additionally accepts `offset`, `limit`, `sort`, `direction`, `model`, and repeated `exclude_model`; pages are limited to 500 rows.
 
 Reset body:
 

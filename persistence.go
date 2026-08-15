@@ -37,7 +37,7 @@ var (
 	apiKeyLabelsKey         = []byte("api_key_labels")
 )
 
-const persistenceSchemaVersion uint64 = 8
+const persistenceSchemaVersion uint64 = 9
 
 const (
 	maxAPIKeyLabels     = 10_000
@@ -318,7 +318,7 @@ func (s *Store) queryStats(queryRange usageRange) (StatsResponse, error) {
 }
 
 func (s *Store) queryStatsBySource(queryRange usageRange, source string) (StatsResponse, error) {
-	return s.queryStatsByFilter(queryRange, newUsageFilter(source, "", "", ""))
+	return s.queryStatsByFilter(queryRange, newUsageFilter(source, ""))
 }
 
 func (s *Store) queryStatsByFilter(queryRange usageRange, filter usageFilter) (StatsResponse, error) {
@@ -370,7 +370,7 @@ func (s *Store) queryRequestPage(queryRange usageRange, offset, limit int, model
 }
 
 func (s *Store) queryRequestPageBySource(queryRange usageRange, offset, limit int, model, source, resultFilter string) (RequestPage, error) {
-	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, "", "", ""), resultFilter)
+	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, ""), resultFilter)
 }
 
 func (s *Store) queryRequestPageByFilter(queryRange usageRange, offset, limit int, model string, filter usageFilter, resultFilter string) (RequestPage, error) {
@@ -1815,7 +1815,31 @@ func (a *storeActor) restoreBackup(backup []byte) (*bolt.DB, error) {
 }
 
 func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
-	if version >= 5 {
+	type legacyDimensions struct {
+		Dimensions
+		AuthProvider string `json:"auth_provider"`
+		AuthAccount  string `json:"auth_account"`
+	}
+
+	type legacyRequestDetail struct {
+		Sequence uint64    `json:"sequence"`
+		Time     time.Time `json:"time"`
+		legacyDimensions
+		Counters
+		Result        string         `json:"result"`
+		LatencyNS     uint64         `json:"latency_ns"`
+		TTFTNS        uint64         `json:"ttft_ns"`
+		GenerationNS  uint64         `json:"generation_ns"`
+		TPS           float64        `json:"tps"`
+		CacheHit      bool           `json:"cache_hit"`
+		EstimatedCost *EstimatedCost `json:"estimated_cost,omitempty"`
+	}
+
+	toCurrentRequest := func(request legacyRequestDetail) RequestDetail {
+		return RequestDetail{Sequence: request.Sequence, Time: request.Time, Dimensions: request.Dimensions, Counters: request.Counters, Result: request.Result, LatencyNS: request.LatencyNS, TTFTNS: request.TTFTNS, GenerationNS: request.GenerationNS, TPS: request.TPS, CacheHit: request.CacheHit, EstimatedCost: request.EstimatedCost}
+	}
+
+	if version >= persistenceSchemaVersion {
 		return nil
 	}
 	if hours != nil {
@@ -1840,7 +1864,7 @@ func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
 				if value == nil {
 					return nil
 				}
-				var dimensions Dimensions
+				var dimensions legacyDimensions
 				if err := json.Unmarshal(key, &dimensions); err != nil {
 					return fmt.Errorf("decode dimensions for source migration: %w", err)
 				}
@@ -1848,8 +1872,9 @@ func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
 				if err := json.Unmarshal(value, &counters); err != nil {
 					return fmt.Errorf("decode counters for source migration: %w", err)
 				}
-				sanitized := sanitizeDimensionsSource(dimensions)
-				changed = changed || sanitized != dimensions
+				sanitized := dimensions.Dimensions
+				sanitized.Source = canonicalUsageSourceWithIdentity(sanitized, dimensions.AuthProvider, dimensions.AuthAccount)
+				changed = true
 				combined := merged[sanitized]
 				combined.add(counters)
 				merged[sanitized] = combined
@@ -1891,16 +1916,13 @@ func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
 			if value == nil {
 				return nil
 			}
-			var request RequestDetail
+			var request legacyRequestDetail
 			if err := json.Unmarshal(value, &request); err != nil {
 				return fmt.Errorf("decode request for source migration: %w", err)
 			}
-			sanitized := sanitizeDimensionsSource(request.Dimensions)
-			if sanitized == request.Dimensions {
-				return nil
-			}
-			request.Dimensions = sanitized
-			encoded, err := json.Marshal(request)
+			current := toCurrentRequest(request)
+			current.Source = canonicalUsageSourceWithIdentity(current.Dimensions, request.AuthProvider, request.AuthAccount)
+			encoded, err := json.Marshal(current)
 			if err != nil {
 				return err
 			}

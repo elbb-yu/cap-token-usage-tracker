@@ -14,8 +14,6 @@ type Dimensions struct {
 	Model            string `json:"model"`
 	Alias            string `json:"alias"`
 	Source           string `json:"source"`
-	AuthProvider     string `json:"auth_provider,omitempty"`
-	AuthAccount      string `json:"auth_account,omitempty"`
 	APIKey           string `json:"api_key,omitempty"`
 	APIKeyHash       string `json:"api_key_hash,omitempty"`
 	APIKeyGeneration uint64 `json:"api_key_generation,omitempty"`
@@ -32,19 +30,13 @@ type Dimensions struct {
 // Empty fields intentionally mean no restriction, which preserves legacy callers.
 type usageFilter struct {
 	Source           string
-	AuthProvider     string
-	AuthAccount      string
 	APIKeyHash       string
 	APIKeyGeneration uint64
 	Model            string
 }
 
-func newUsageFilter(source, authProvider, authAccount, apiKeyIdentity string) usageFilter {
-	filter := usageFilter{
-		Source:       normalizeDimension(source),
-		AuthProvider: normalizeDimension(authProvider),
-		AuthAccount:  normalizeDimension(authAccount),
-	}
+func newUsageFilter(source, apiKeyIdentity string) usageFilter {
+	filter := usageFilter{Source: normalizeDimension(source)}
 	if generation, hash, ok := parseAPIKeyRef(apiKeyIdentity); ok {
 		filter.APIKeyGeneration = generation
 		filter.APIKeyHash = hash
@@ -56,8 +48,6 @@ func newUsageFilter(source, authProvider, authAccount, apiKeyIdentity string) us
 
 func (f usageFilter) matches(dimensions Dimensions) bool {
 	return (f.Source == "" || dimensions.Source == f.Source) &&
-		(f.AuthProvider == "" || dimensions.AuthProvider == f.AuthProvider) &&
-		(f.AuthAccount == "" || dimensions.AuthAccount == f.AuthAccount) &&
 		(f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash) &&
 		(f.APIKeyGeneration == 0 || dimensions.APIKeyGeneration == f.APIKeyGeneration) &&
 		(f.Model == "" || compactModelName(dimensions.Model) == f.Model)
@@ -183,35 +173,33 @@ type ModelSeriesPoint struct {
 }
 
 type StatsResponse struct {
-	SchemaVersion  uint32               `json:"schema_version"`
-	GeneratedAt    time.Time            `json:"generated_at"`
-	Range          string               `json:"range"`
-	RetainedSince  time.Time            `json:"retained_since"`
-	LastUsed       time.Time            `json:"last_used"`
-	Summary        Counters             `json:"summary"`
-	Groups         []GroupStats         `json:"groups"`
-	Series         []SeriesPoint        `json:"series"`
-	ModelSeries    []ModelSeriesPoint   `json:"model_series"`
-	Sources        []string             `json:"sources"`
-	AuthIdentities []AuthIdentityOption `json:"auth_identities"`
-	APIKeys        []APIKeyOption       `json:"api_keys,omitempty"`
+	SchemaVersion uint32             `json:"schema_version"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Range         string             `json:"range"`
+	RetainedSince time.Time          `json:"retained_since"`
+	LastUsed      time.Time          `json:"last_used"`
+	Summary       Counters           `json:"summary"`
+	Groups        []GroupStats       `json:"groups"`
+	Series        []SeriesPoint      `json:"series"`
+	ModelSeries   []ModelSeriesPoint `json:"model_series"`
+	Sources       []string           `json:"sources"`
+	APIKeys       []APIKeyOption     `json:"api_keys,omitempty"`
 }
 
 // InitialStatsResponse excludes dimension rows and per-model time points so the
 // dashboard can render its first screen without parsing the largest payloads.
 type InitialStatsResponse struct {
-	SchemaVersion  uint32               `json:"schema_version"`
-	GeneratedAt    time.Time            `json:"generated_at"`
-	Range          string               `json:"range"`
-	RetainedSince  time.Time            `json:"retained_since"`
-	LastUsed       time.Time            `json:"last_used"`
-	BucketSeconds  uint64               `json:"bucket_seconds"`
-	Summary        Counters             `json:"summary"`
-	Models         []ModelStats         `json:"models"`
-	Series         []SeriesPoint        `json:"series"`
-	Sources        []string             `json:"sources"`
-	AuthIdentities []AuthIdentityOption `json:"auth_identities"`
-	APIKeys        []APIKeyOption       `json:"api_keys,omitempty"`
+	SchemaVersion uint32         `json:"schema_version"`
+	GeneratedAt   time.Time      `json:"generated_at"`
+	Range         string         `json:"range"`
+	RetainedSince time.Time      `json:"retained_since"`
+	LastUsed      time.Time      `json:"last_used"`
+	BucketSeconds uint64         `json:"bucket_seconds"`
+	Summary       Counters       `json:"summary"`
+	Models        []ModelStats   `json:"models"`
+	Series        []SeriesPoint  `json:"series"`
+	Sources       []string       `json:"sources"`
+	APIKeys       []APIKeyOption `json:"api_keys,omitempty"`
 }
 
 type StatsTrendResponse struct {
@@ -278,12 +266,6 @@ func (p *GroupStatsPage) Reveal(decrypt DecryptFunc) {
 	}
 }
 
-type AuthIdentityOption struct {
-	Provider string `json:"provider"`
-	Account  string `json:"account"`
-	Label    string `json:"label"`
-}
-
 type usageRange struct {
 	Name  string
 	Start time.Time
@@ -299,7 +281,7 @@ func buildStats(data map[aggregateKey]Counters, since, lastUsed time.Time, reque
 }
 
 func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, source string, now time.Time) StatsResponse {
-	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, "", "", ""), now, nil)
+	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, ""), now, nil)
 }
 
 func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time, apiKeyCiphertexts map[string]string) StatsResponse {
@@ -311,7 +293,6 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 	}]Counters)
 	summary := Counters{}
 	sources := make(map[string]struct{})
-	identities := make(map[usageIdentity]struct{})
 	apiKeyRefs := make(map[string]struct{})
 	for key, counters := range data {
 		bucketTime := time.Unix(key.Hour, 0).UTC()
@@ -324,9 +305,6 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		dimensions := sanitizeDimensionsSource(key.Dimensions)
 		if dimensions.Source != "" {
 			sources[dimensions.Source] = struct{}{}
-		}
-		if dimensions.AuthProvider != "" && dimensions.AuthAccount != "" {
-			identities[usageIdentity{Provider: dimensions.AuthProvider, Account: dimensions.AuthAccount}] = struct{}{}
 		}
 		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
 			apiKeyRefs[ref] = struct{}{}
@@ -415,19 +393,6 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		sourceValues = append(sourceValues, value)
 	}
 	sort.Strings(sourceValues)
-	identityValues := make([]AuthIdentityOption, 0, len(identities))
-	for identity := range identities {
-		identityValues = append(identityValues, AuthIdentityOption{Provider: identity.Provider, Account: identity.Account, Label: identity.Provider + "-" + identity.Account})
-	}
-	sort.Slice(identityValues, func(i, j int) bool {
-		if identityValues[i].Label != identityValues[j].Label {
-			return identityValues[i].Label < identityValues[j].Label
-		}
-		if identityValues[i].Provider != identityValues[j].Provider {
-			return identityValues[i].Provider < identityValues[j].Provider
-		}
-		return identityValues[i].Account < identityValues[j].Account
-	})
 	apiKeys := make([]APIKeyOption, 0, len(apiKeyRefs))
 	for ref := range apiKeyRefs {
 		generation, hash, _ := parseAPIKeyRef(ref)
@@ -436,18 +401,17 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 	sort.Slice(apiKeys, func(i, j int) bool { return apiKeys[i].Ref < apiKeys[j].Ref })
 
 	return StatsResponse{
-		SchemaVersion:  1,
-		GeneratedAt:    now.UTC(),
-		Range:          queryRange.Name,
-		RetainedSince:  since.UTC(),
-		LastUsed:       lastUsed.UTC(),
-		Summary:        summary,
-		Groups:         groupRows,
-		Series:         points,
-		ModelSeries:    modelPoints,
-		Sources:        sourceValues,
-		AuthIdentities: identityValues,
-		APIKeys:        apiKeys,
+		SchemaVersion: 1,
+		GeneratedAt:   now.UTC(),
+		Range:         queryRange.Name,
+		RetainedSince: since.UTC(),
+		LastUsed:      lastUsed.UTC(),
+		Summary:       summary,
+		Groups:        groupRows,
+		Series:        points,
+		ModelSeries:   modelPoints,
+		Sources:       sourceValues,
+		APIKeys:       apiKeys,
 	}
 }
 
@@ -534,18 +498,17 @@ func initialStatsFromFull(stats StatsResponse, queryRange usageRange) InitialSta
 		models[model] = value
 	}
 	return InitialStatsResponse{
-		SchemaVersion:  2,
-		GeneratedAt:    stats.GeneratedAt,
-		Range:          stats.Range,
-		RetainedSince:  stats.RetainedSince,
-		LastUsed:       stats.LastUsed,
-		BucketSeconds:  bucketSeconds,
-		Summary:        stats.Summary,
-		Models:         sortedCompactModels(models),
-		Series:         sortedCompactSeries(series),
-		Sources:        stats.Sources,
-		AuthIdentities: stats.AuthIdentities,
-		APIKeys:        stats.APIKeys,
+		SchemaVersion: 2,
+		GeneratedAt:   stats.GeneratedAt,
+		Range:         stats.Range,
+		RetainedSince: stats.RetainedSince,
+		LastUsed:      stats.LastUsed,
+		BucketSeconds: bucketSeconds,
+		Summary:       stats.Summary,
+		Models:        sortedCompactModels(models),
+		Series:        sortedCompactSeries(series),
+		Sources:       stats.Sources,
+		APIKeys:       stats.APIKeys,
 	}
 }
 
@@ -588,23 +551,6 @@ func trendStatsFromFull(stats StatsResponse, queryRange usageRange) StatsTrendRe
 	return StatsTrendResponse{SchemaVersion: 2, GeneratedAt: stats.GeneratedAt, Range: stats.Range, BucketSeconds: bucketSeconds, ModelSeries: points}
 }
 
-func sortedStatsIdentities(identities map[usageIdentity]struct{}) []AuthIdentityOption {
-	values := make([]AuthIdentityOption, 0, len(identities))
-	for identity := range identities {
-		values = append(values, AuthIdentityOption{Provider: identity.Provider, Account: identity.Account, Label: identity.Provider + "-" + identity.Account})
-	}
-	sort.Slice(values, func(i, j int) bool {
-		if values[i].Label != values[j].Label {
-			return values[i].Label < values[j].Label
-		}
-		if values[i].Provider != values[j].Provider {
-			return values[i].Provider < values[j].Provider
-		}
-		return values[i].Account < values[j].Account
-	})
-	return values
-}
-
 func sortedStatsAPIKeys(refs map[string]struct{}, ciphertexts map[string]string) []APIKeyOption {
 	values := make([]APIKeyOption, 0, len(refs))
 	for ref := range refs {
@@ -620,7 +566,6 @@ func buildInitialStatsForRange(data map[aggregateKey]Counters, since, lastUsed t
 	series := make(map[int64]Counters)
 	models := make(map[string]Counters)
 	sources := make(map[string]struct{})
-	identities := make(map[usageIdentity]struct{})
 	apiKeyRefs := make(map[string]struct{})
 	summary := Counters{}
 	for key, counters := range data {
@@ -631,9 +576,6 @@ func buildInitialStatsForRange(data map[aggregateKey]Counters, since, lastUsed t
 		dimensions := sanitizeDimensionsSource(key.Dimensions)
 		if dimensions.Source != "" {
 			sources[dimensions.Source] = struct{}{}
-		}
-		if dimensions.AuthProvider != "" && dimensions.AuthAccount != "" {
-			identities[usageIdentity{Provider: dimensions.AuthProvider, Account: dimensions.AuthAccount}] = struct{}{}
 		}
 		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
 			apiKeyRefs[ref] = struct{}{}
@@ -656,7 +598,7 @@ func buildInitialStatsForRange(data map[aggregateKey]Counters, since, lastUsed t
 		sourceValues = append(sourceValues, source)
 	}
 	sort.Strings(sourceValues)
-	return InitialStatsResponse{SchemaVersion: 2, GeneratedAt: now.UTC(), Range: queryRange.Name, RetainedSince: since.UTC(), LastUsed: lastUsed.UTC(), BucketSeconds: bucketSeconds, Summary: summary, Models: sortedCompactModels(models), Series: sortedCompactSeries(series), Sources: sourceValues, AuthIdentities: sortedStatsIdentities(identities), APIKeys: sortedStatsAPIKeys(apiKeyRefs, apiKeyCiphertexts)}
+	return InitialStatsResponse{SchemaVersion: 2, GeneratedAt: now.UTC(), Range: queryRange.Name, RetainedSince: since.UTC(), LastUsed: lastUsed.UTC(), BucketSeconds: bucketSeconds, Summary: summary, Models: sortedCompactModels(models), Series: sortedCompactSeries(series), Sources: sourceValues, APIKeys: sortedStatsAPIKeys(apiKeyRefs, apiKeyCiphertexts)}
 }
 
 func buildStatsTrendForRange(data map[aggregateKey]Counters, since time.Time, queryRange usageRange, filter usageFilter, now time.Time) StatsTrendResponse {
@@ -797,8 +739,6 @@ func compareDimensions(left, right Dimensions) int {
 		cmp.Compare(left.Model, right.Model),
 		cmp.Compare(left.Alias, right.Alias),
 		cmp.Compare(left.Source, right.Source),
-		cmp.Compare(left.AuthProvider, right.AuthProvider),
-		cmp.Compare(left.AuthAccount, right.AuthAccount),
 		cmp.Compare(left.APIKeyGeneration, right.APIKeyGeneration),
 		cmp.Compare(left.APIKeyHash, right.APIKeyHash),
 		cmp.Compare(left.AuthType, right.AuthType),

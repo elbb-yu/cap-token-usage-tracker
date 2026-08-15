@@ -128,7 +128,7 @@ func TestDashboardEnhancesNativeSelectMenus(t *testing.T) {
 		`aria-activedescendant`,
 		`new Event('change',{bubbles:true})`,
 		`['ArrowDown','ArrowUp','Home','End']`,
-		`enhanceSelect(select);enhanceSelect(identity);renderSourceOptions([]);renderAuthIdentityOptions([]);`,
+		`enhanceSelect(select);renderSourceOptions([]);`,
 		`syncEnhancedSelect(select)`,
 		`enhanceDashboardSelects(list)`,
 		`enhanceDashboardSelects(document)`,
@@ -829,15 +829,9 @@ func TestDashboardModelShareMetricSwitch(t *testing.T) {
 		`data-model-share-metric="requests" aria-pressed="true"`,
 		`data-model-share-metric="tokens" aria-pressed="false"`,
 		`data-model-share-metric="cost" aria-pressed="false"`,
-		`var selectedSource='',selectedAuthIdentity=null,modelShareMetric='requests'`,
-		`identity.id='authIdentityFilter'`,
-		`function authIdentityLabel(item)`,
-		`function renderAuthIdentityOptions(identities)`,
-		`currentData.auth_identities`,
-		`auth_provider`,
-		`auth_account`,
-		`key:'auth_identity'`,
-		`JSON.stringify([item.provider,item.account])`,
+		`var selectedSource='',modelShareMetric='requests'`,
+		`function renderSourceOptions(sources)`,
+		`if(selectedSource)params.set('source',selectedSource)`,
 		`function modelShareMetricValue(item)`,
 		`if(modelShareMetric==='requests')return Number(item.requests||0)`,
 		`if(modelShareMetric==='tokens')return Number(item.total_tokens||0)`,
@@ -858,6 +852,16 @@ func TestDashboardModelShareMetricSwitch(t *testing.T) {
 	} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("dashboard missing model-share metric switch contract %q", required)
+		}
+	}
+	for _, forbidden := range []string{
+		`authIdentityFilter`,
+		`auth_identity`,
+		`auth_provider`,
+		`auth_account`,
+	} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("dashboard must not retain authentication identity UI %q", forbidden)
 		}
 	}
 }

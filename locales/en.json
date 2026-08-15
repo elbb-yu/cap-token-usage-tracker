@@ -1,7 +1,4 @@
 {
-  "identityFilter.label": "Authentication identity",
-  "identityFilter.all": "All identities",
-  "table.authIdentity": "Authentication identity",
   "app.title": "Token Usage Analytics",
   "app.eyebrow": "Usage analytics",
   "app.subtitle": "Review model share, Input / Output / Cache Read Token trends, cache hit rate, and exact costs calculated from the backend price book.",

@@ -510,7 +510,7 @@ func TestManagementSourceFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
 	}
 }
 
-func TestManagementAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t *testing.T) {
+func TestManagementIgnoresLegacyAuthenticationIdentityParameters(t *testing.T) {
 	config := testConfig(t)
 	store, err := openStore(config)
 	if err != nil {
@@ -521,14 +521,14 @@ func TestManagementAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t 
 	}}
 	defer runtime.shutdown()
 	for _, usage := range []normalizedUsage{
-		{Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 3}},
-		{Dimensions: Dimensions{Model: "beta", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 5}},
+		{Dimensions: Dimensions{Model: "alpha", Source: "Codex-user@example.com"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 3}},
+		{Dimensions: Dimensions{Model: "beta", Source: "Antigravity-user@example.com"}, RequestedAt: nowUTC(), Counters: Counters{Requests: 1, TotalTokens: 5}},
 	} {
 		if err := store.Record(usage); err != nil {
 			t.Fatal(err)
 		}
 	}
-	query := url.Values{"range": []string{"24h"}, "source": []string{"cli"}, "auth_provider": []string{"Codex"}, "auth_account": []string{"user@example.com"}}
+	query := url.Values{"range": []string{"24h"}, "source": []string{"Codex-user@example.com"}, "auth_provider": []string{"ignored"}, "auth_account": []string{"ignored"}}
 	for _, path := range []string{runtime.routes.resourceStatsPath, runtime.routes.resourceRequestsPath, runtime.routes.resourceCostsPath} {
 		if path == runtime.routes.resourceRequestsPath {
 			query.Set("offset", "0")
@@ -536,7 +536,7 @@ func TestManagementAuthenticationIdentityFilterAppliesToStatsRequestsAndCosts(t 
 		}
 		request, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: path, Query: query})
 		response, err := runtime.handleManagement(request)
-		if err != nil || response.StatusCode != http.StatusOK || strings.Contains(string(response.Body), "\"auth_provider\":\"Antigravity\"") {
+		if err != nil || response.StatusCode != http.StatusOK || strings.Contains(string(response.Body), "\"auth_provider\"") || strings.Contains(string(response.Body), "\"auth_account\"") {
 			t.Fatalf("identity-filtered %s response: %+v, %v", path, response, err)
 		}
 	}

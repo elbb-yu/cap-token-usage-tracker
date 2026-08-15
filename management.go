@@ -362,7 +362,7 @@ func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (plug
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity))
+	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity))
 	if err != nil {
 		status := errorHTTPStatus(err)
 		return jsonResponse(status, map[string]any{"error": err.Error()}), nil
@@ -383,7 +383,7 @@ func (r *pluginRuntime) statsFilter(request pluginapi.ManagementRequest, fullMod
 	if err != nil {
 		return usageRange{}, usageFilter{}, err
 	}
-	return queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity), nil
+	return queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity), nil
 }
 
 func (r *pluginRuntime) initialStatsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
@@ -480,7 +480,7 @@ func sortGroupStats(items []GroupStats, sortKey, direction string) error {
 		return withStatus(http.StatusBadRequest, "direction must be asc or desc")
 	}
 	numeric := map[string]bool{"requests": true, "failed_requests": true, "input_tokens": true, "output_tokens": true, "reasoning_tokens": true, "cache_read_tokens": true, "cache_creation_tokens": true, "total_tokens": true, "average_latency_ns": true, "average_ttft_ns": true}
-	text := map[string]bool{"model": true, "provider": true, "auth_identity": true, "api_key": true, "alias": true, "source": true, "executor_type": true, "auth_type": true, "service_tier": true, "reasoning_effort": true}
+	text := map[string]bool{"model": true, "provider": true, "api_key": true, "alias": true, "source": true, "executor_type": true, "auth_type": true, "service_tier": true, "reasoning_effort": true}
 	if !numeric[sortKey] && !text[sortKey] {
 		return withStatus(http.StatusBadRequest, "unsupported group sort %q", sortKey)
 	}
@@ -490,8 +490,6 @@ func sortGroupStats(items []GroupStats, sortKey, direction string) error {
 			return compactModelName(item.Model)
 		case "provider":
 			return item.Provider
-		case "auth_identity":
-			return item.AuthProvider + "-" + item.AuthAccount
 		case "api_key":
 			return item.APIKeyHash
 		case "alias":
@@ -577,7 +575,7 @@ func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (p
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity), request.Query.Get("result"))
+	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), apiKeyIdentity), request.Query.Get("result"))
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
@@ -600,7 +598,7 @@ func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (plug
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account"), apiKeyIdentity))
+	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity))
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}

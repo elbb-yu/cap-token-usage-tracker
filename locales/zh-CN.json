@@ -1,7 +1,4 @@
 {
-  "identityFilter.label": "认证身份",
-  "identityFilter.all": "全部认证身份",
-  "table.authIdentity": "认证身份",
   "app.title": "Token 用量统计",
   "app.eyebrow": "用量分析",
   "app.subtitle": "查看模型占比、输入 / 输出 / 缓存读取 Token 趋势、缓存命中率，以及后端价格表计算的精确费用。",
