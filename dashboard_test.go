@@ -345,6 +345,20 @@ func TestDashboardRefreshPreservesTrendZoom(t *testing.T) {
 	}
 }
 
+func TestDashboardRefreshRetainsMatchingCostSnapshot(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		"currentCosts=null,costQuery='',costLoadError=''",
+		"render(initial,costQuery===query?currentCosts:null)",
+		"costQuery=query;costLoadError='';render(currentData,costs);",
+		"costLoadError=error.message;render(currentData,costQuery===query?currentCosts:null);",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard refresh must retain matching cost data until its replacement arrives: %q", required)
+		}
+	}
+}
+
 func TestDashboardTrendZoomsAreIndependent(t *testing.T) {
 	html := dashboardHTML
 	for _, required := range []string{
