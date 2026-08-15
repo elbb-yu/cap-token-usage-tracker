@@ -58,13 +58,15 @@ func decodeUsage(raw []byte, now time.Time) (normalizedUsage, error) {
 	provider := normalizeDimension(firstString(root, "Provider", "provider"))
 	executorType := normalizeDimension(firstString(root, "ExecutorType", "executor_type"))
 	authType := normalizeDimension(firstString(root, "AuthType", "auth_type"))
+	apiKey := firstString(root, "APIKey", "api_key")
 	return normalizedUsage{
 		Dimensions: Dimensions{
 			Provider:        provider,
 			ExecutorType:    executorType,
 			Model:           normalizeDimension(firstString(root, "Model", "model")),
 			Alias:           normalizeDimension(firstString(root, "Alias", "alias")),
-			Source:          safeUsageSource(firstString(root, "Source", "source"), firstString(root, "APIKey", "api_key"), provider, executorType, authType),
+			Source:          safeUsageSource(firstString(root, "Source", "source"), apiKey, provider, executorType, authType),
+			APIKey:          normalizeDimension(apiKey),
 			AuthType:        authType,
 			ServiceTier:     normalizeDimension(firstString(root, "ServiceTier", "service_tier")),
 			ReasoningEffort: normalizeDimension(firstString(root, "ReasoningEffort", "reasoning_effort")),
@@ -105,8 +107,33 @@ func safeUsageSource(rawSource, apiKey, provider, executorType, authType string)
 	return normalizeDimension(source)
 }
 
+func canonicalUsageSource(dimensions Dimensions) string {
+	return canonicalUsageSourceWithIdentity(dimensions, "", "")
+}
+
+func canonicalUsageSourceWithIdentity(dimensions Dimensions, authProvider, authAccount string) string {
+	source := safeUsageSource(dimensions.Source, "", dimensions.Provider, dimensions.ExecutorType, dimensions.AuthType)
+	if provider, account := displayAuthProvider(authProvider), safeAuthAccount(authAccount); provider != "" && account != "" {
+		return normalizeDimension(provider + "-" + account)
+	}
+	if isOpenAICompatibleProvider(dimensions.Provider, dimensions.ExecutorType) {
+		const prefix = "openai-compatible-"
+		if strings.HasPrefix(strings.ToLower(source), prefix) {
+			if name := normalizeDimension(source[len(prefix):]); name != "" {
+				return name
+			}
+		}
+	}
+	return source
+}
+
+func isOpenAICompatibleProvider(provider, executorType string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	executorType = strings.ToLower(strings.TrimSpace(executorType))
+	return strings.HasPrefix(provider, "openai-compatible-") || provider == "openai-compatibility" || executorType == "openaicompatexecutor"
+}
 func sanitizeDimensionsSource(dimensions Dimensions) Dimensions {
-	dimensions.Source = safeUsageSource(dimensions.Source, "", dimensions.Provider, dimensions.ExecutorType, dimensions.AuthType)
+	dimensions.Source = canonicalUsageSource(dimensions)
 	return dimensions
 }
 

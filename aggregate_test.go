@@ -1,7 +1,9 @@
 package main
 
 import (
+	"encoding/json"
 	"math"
+	"strings"
 	"testing"
 	"time"
 )
@@ -121,20 +123,17 @@ func TestBuildStatsForRangeFiltersSourceAndRetainsSourceOptions(t *testing.T) {
 	}
 }
 
-func TestBuildStatsForRangeSeparatesAndFiltersAuthenticationIdentities(t *testing.T) {
+func TestBuildStatsForRangeSeparatesAndFiltersSources(t *testing.T) {
 	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	hour := now.Truncate(time.Hour).Unix()
 	data := map[aggregateKey]Counters{
-		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Codex", AuthAccount: "user@example.com"}}:       {Requests: 2, TotalTokens: 20},
-		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "cli", AuthProvider: "Antigravity", AuthAccount: "user@example.com"}}: {Requests: 1, TotalTokens: 10},
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "Codex-user@example.com"}}:       {Requests: 2, TotalTokens: 20},
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "Antigravity-user@example.com"}}: {Requests: 1, TotalTokens: 10},
 	}
 
-	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, newUsageFilter("cli", "Codex", "user@example.com"), now)
-	if stats.Summary.Requests != 2 || stats.Summary.TotalTokens != 20 || len(stats.Groups) != 1 || stats.Groups[0].AuthProvider != "Codex" {
-		t.Fatalf("identity-filtered stats = %+v", stats)
-	}
-	if len(stats.AuthIdentities) != 2 || stats.AuthIdentities[0].Label != "Antigravity-user@example.com" || stats.AuthIdentities[1].Label != "Codex-user@example.com" {
-		t.Fatalf("identity options = %+v", stats.AuthIdentities)
+	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, newUsageFilter("Codex-user@example.com", ""), now, nil)
+	if stats.Summary.Requests != 2 || stats.Summary.TotalTokens != 20 || len(stats.Groups) != 1 || stats.Groups[0].Source != "Codex-user@example.com" {
+		t.Fatalf("source-filtered stats = %+v", stats)
 	}
 }
 
@@ -173,5 +172,43 @@ func TestQueryCutoffUsesUTCPartialBoundary(t *testing.T) {
 	expected := now.UTC().Add(-24 * time.Hour).Truncate(time.Minute)
 	if !cutoff.Equal(expected) {
 		t.Fatalf("cutoff = %v, expected %v", cutoff, expected)
+	}
+}
+
+func TestCompactStatsDownsamplesAndPreservesCounters(t *testing.T) {
+	now := time.Date(2026, 8, 14, 12, 0, 0, 0, time.UTC)
+	model := Dimensions{Model: "compact-model", Source: "cli"}
+	data := map[aggregateKey]Counters{
+		{Hour: now.Add(-4*time.Minute - 30*time.Second).Unix(), Dimensions: model}: {Requests: 2, TotalTokens: 20, TotalLatencyNS: uint64(4 * time.Second), LatencySamples: 2, TotalTTFTNS: uint64(time.Second), TTFTSamples: 1},
+		{Hour: now.Add(-2*time.Minute - 30*time.Second).Unix(), Dimensions: model}: {Requests: 3, TotalTokens: 30, TotalLatencyNS: uint64(9 * time.Second), LatencySamples: 3, TotalTTFTNS: uint64(2 * time.Second), TTFTSamples: 2},
+	}
+	queryRange := usageRange{Name: "24h", Start: now.Add(-24 * time.Hour)}
+	initial := buildInitialStatsForRange(data, now.Add(-30*24*time.Hour), now, queryRange, usageFilter{}, now, nil)
+	if initial.SchemaVersion != 2 || initial.BucketSeconds != 300 || len(initial.Series) != 1 || len(initial.Models) != 1 {
+		t.Fatalf("compact initial shape = %+v", initial)
+	}
+	if initial.Summary.Requests != 5 || initial.Summary.TotalTokens != 50 || initial.Models[0].AverageLatencyNS != uint64(2600*time.Millisecond) || initial.Models[0].AverageTTFTNS != uint64(time.Second) {
+		t.Fatalf("compact initial counters = %+v", initial)
+	}
+	trend := buildStatsTrendForRange(data, now.Add(-30*24*time.Hour), queryRange, usageFilter{}, now)
+	if trend.SchemaVersion != 2 || trend.BucketSeconds != 300 || len(trend.ModelSeries) != 1 || trend.ModelSeries[0].Requests != 5 || trend.ModelSeries[0].TotalTTFTNS != uint64(3*time.Second) || trend.ModelSeries[0].TTFTSamples != 3 {
+		t.Fatalf("compact trend = %+v", trend)
+	}
+	sevenDays := usageRange{Name: "7d", Start: now.Add(-7 * 24 * time.Hour)}
+	if got := compactBucketSeconds(sevenDays, now.Add(-30*24*time.Hour), now); got != uint64(time.Hour/time.Second) {
+		t.Fatalf("7d bucket seconds = %d", got)
+	}
+}
+
+func TestInitialStatsJSONExcludesDetails(t *testing.T) {
+	response := InitialStatsResponse{SchemaVersion: 2, Models: []ModelStats{{Model: "m"}}, Series: []SeriesPoint{}}
+	body, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{`"groups"`, `"model_series"`, `"provider"`, `"api_key"`} {
+		if strings.Contains(string(body), forbidden) {
+			t.Fatalf("initial response contains %s: %s", forbidden, body)
+		}
 	}
 }

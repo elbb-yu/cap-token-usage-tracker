@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -23,20 +24,34 @@ type managementRegistrationResponse struct {
 }
 
 type registeredRoutes struct {
-	pluginID                 string
-	statsPath                string
-	resetPath                string
-	backupPath               string
-	restorePath              string
-	dashboardPath            string
-	resourceStatsPath        string
-	resourceRequestsPath     string
-	resourceCostsPath        string
-	resourceExchangeRatePath string
-	pricesPath               string
-	priceSyncPath            string
-	resourcePricesPath       string
-	resourcePreferencesPath  string
+	pluginID                  string
+	statsPath                 string
+	resetPath                 string
+	backupPath                string
+	restorePath               string
+	dashboardPath             string
+	fullDashboardPath         string
+	fullModeSessionPath       string
+	fullModeSessionRevokePath string
+	fullModeDataPath          string
+	fullModeAPIKeyLabelsPath  string
+	fullModePricesPath        string
+	fullModePricesSavePath    string
+	fullModePriceSyncPath     string
+	fullModeBackupPath        string
+	fullModeRestorePath       string
+	fullModeResetPath         string
+	resourceStatsPath         string
+	resourceStatsInitialPath  string
+	resourceStatsTrendPath    string
+	resourceStatsGroupsPath   string
+	resourceRequestsPath      string
+	resourceCostsPath         string
+	resourceExchangeRatePath  string
+	pricesPath                string
+	priceSyncPath             string
+	resourcePricesPath        string
+	resourcePreferencesPath   string
 }
 
 func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationResponse, error) {
@@ -50,20 +65,34 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 	}
 
 	routes := registeredRoutes{
-		pluginID:                 pluginID,
-		statsPath:                "/v0/management/plugins/" + pluginID + "/stats",
-		resetPath:                "/v0/management/plugins/" + pluginID + "/reset",
-		backupPath:               "/v0/management/plugins/" + pluginID + "/backup",
-		restorePath:              "/v0/management/plugins/" + pluginID + "/restore",
-		dashboardPath:            "/v0/resource/plugins/" + pluginID + "/dashboard",
-		resourceStatsPath:        "/v0/resource/plugins/" + pluginID + "/stats",
-		resourceRequestsPath:     "/v0/resource/plugins/" + pluginID + "/requests",
-		resourceCostsPath:        "/v0/resource/plugins/" + pluginID + "/costs",
-		resourceExchangeRatePath: "/v0/resource/plugins/" + pluginID + "/exchange-rate",
-		pricesPath:               "/v0/management/plugins/" + pluginID + "/prices",
-		priceSyncPath:            "/v0/management/plugins/" + pluginID + "/prices/sync",
-		resourcePricesPath:       "/v0/resource/plugins/" + pluginID + "/prices",
-		resourcePreferencesPath:  "/v0/resource/plugins/" + pluginID + "/preferences",
+		pluginID:                  pluginID,
+		statsPath:                 "/v0/management/plugins/" + pluginID + "/stats",
+		resetPath:                 "/v0/management/plugins/" + pluginID + "/reset",
+		backupPath:                "/v0/management/plugins/" + pluginID + "/backup",
+		restorePath:               "/v0/management/plugins/" + pluginID + "/restore",
+		dashboardPath:             "/v0/resource/plugins/" + pluginID + "/dashboard",
+		fullDashboardPath:         "/v0/resource/plugins/" + pluginID + "/full-dashboard",
+		fullModeSessionPath:       "/v0/management/plugins/" + pluginID + "/full-mode/session",
+		fullModeSessionRevokePath: "/v0/resource/plugins/" + pluginID + "/full-mode/session/revoke",
+		fullModeDataPath:          "/v0/resource/plugins/" + pluginID + "/full-mode/data",
+		fullModeAPIKeyLabelsPath:  "/v0/resource/plugins/" + pluginID + "/full-mode/api-key-labels",
+		fullModePricesPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/prices",
+		fullModePricesSavePath:    "/v0/resource/plugins/" + pluginID + "/full-mode/prices/save",
+		fullModePriceSyncPath:     "/v0/resource/plugins/" + pluginID + "/full-mode/prices/sync",
+		fullModeBackupPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/backup",
+		fullModeRestorePath:       "/v0/resource/plugins/" + pluginID + "/full-mode/restore",
+		fullModeResetPath:         "/v0/resource/plugins/" + pluginID + "/full-mode/reset",
+		resourceStatsPath:         "/v0/resource/plugins/" + pluginID + "/stats",
+		resourceStatsInitialPath:  "/v0/resource/plugins/" + pluginID + "/stats/initial",
+		resourceStatsTrendPath:    "/v0/resource/plugins/" + pluginID + "/stats/trends",
+		resourceStatsGroupsPath:   "/v0/resource/plugins/" + pluginID + "/stats/groups",
+		resourceRequestsPath:      "/v0/resource/plugins/" + pluginID + "/requests",
+		resourceCostsPath:         "/v0/resource/plugins/" + pluginID + "/costs",
+		resourceExchangeRatePath:  "/v0/resource/plugins/" + pluginID + "/exchange-rate",
+		pricesPath:                "/v0/management/plugins/" + pluginID + "/prices",
+		priceSyncPath:             "/v0/management/plugins/" + pluginID + "/prices/sync",
+		resourcePricesPath:        "/v0/resource/plugins/" + pluginID + "/prices",
+		resourcePreferencesPath:   "/v0/resource/plugins/" + pluginID + "/preferences",
 	}
 	r.mu.Lock()
 	r.routes = routes
@@ -71,6 +100,11 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 
 	return managementRegistrationResponse{
 		Routes: []pluginapi.ManagementRoute{
+			{
+				Method:      http.MethodPost,
+				Path:        "/plugins/" + pluginID + "/full-mode/session",
+				Description: "Issue a short-lived capability for the separate full-mode dashboard.",
+			},
 			{
 				Method:      http.MethodGet,
 				Path:        "/plugins/" + pluginID + "/stats",
@@ -108,10 +142,20 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 				Menu:        "Token 用量",
 				Description: "查看持久化的 Token 用量、请求和延迟统计。",
 			},
-			{
-				Path:        "/stats",
-				Description: "Read-only token usage statistics for the plugin dashboard.",
-			},
+			{Path: "/full-dashboard", Description: "Full-mode dashboard shell without protected data."},
+			{Path: "/full-mode/data", Description: "Capability-protected full-mode data."},
+			{Path: "/full-mode/api-key-labels", Description: "Capability-protected API key label management. Send JSON in the X-API-Key-Label header with GET requests."},
+			{Path: "/full-mode/session/revoke", Description: "Revoke a full-mode capability."},
+			{Path: "/full-mode/prices", Description: "Capability-protected model prices."},
+			{Path: "/full-mode/prices/save", Description: "Capability-protected model price save."},
+			{Path: "/full-mode/prices/sync", Description: "Capability-protected model price synchronization."},
+			{Path: "/full-mode/backup", Description: "Capability-protected database backup download."},
+			{Path: "/full-mode/restore", Description: "Capability-protected database backup restore."},
+			{Path: "/full-mode/reset", Description: "Capability-protected statistics reset."},
+			{Path: "/stats", Description: "Read full token usage statistics for compatible clients."},
+			{Path: "/stats/initial", Description: "Read compact first-screen token usage statistics."},
+			{Path: "/stats/trends", Description: "Read downsampled per-model token trends."},
+			{Path: "/stats/groups", Description: "Read detailed dimension statistics."},
 			{
 				Path:        "/requests",
 				Description: "Read paginated per-request token usage details.",
@@ -144,22 +188,112 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 
 	r.mu.RLock()
 	routes := r.routes
+	config := r.config
 	r.mu.RUnlock()
+	response, err := r.dispatchManagement(request, routes)
+	if err != nil {
+		return pluginapi.ManagementResponse{}, err
+	}
+	return maybeCompressResponse(request, response, config), nil
+}
+
+func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, routes registeredRoutes) (pluginapi.ManagementResponse, error) {
 	if routes.pluginID == "" {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "management routes are not registered"}), nil
 	}
 
 	switch request.Path {
+	case routes.fullModeSessionPath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		return r.fullModeSessionResponse()
 	case routes.dashboardPath:
 		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return dashboardResponse(), nil
+	case routes.fullDashboardPath:
+		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return fullDashboardResponse(), nil
+	case routes.fullModeDataPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.fullModeDataResponse(request)
+	case routes.fullModeAPIKeyLabelsPath:
+		// Resource routes are dispatched by the host as GET. Keep PUT support
+		// for direct/plugin-level callers and newer hosts.
+		if !strings.EqualFold(request.Method, http.MethodGet) && !strings.EqualFold(request.Method, http.MethodPut) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.setAPIKeyLabelResponse(request)
+	case routes.fullModeSessionRevokePath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.revokeFullModeSessionResponse(request)
+	case routes.fullModePricesPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+		}
+		return r.pricesResponse()
+	case routes.fullModePricesSavePath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.fullModeStagedPayloadResponse(request, 2<<20, "application/json", r.savePricesResponse)
+	case routes.fullModePriceSyncPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.fullModeStagedPayloadResponse(request, 2<<20, "application/json", r.syncPricesResponse)
+	case routes.fullModeBackupPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+		}
+		return r.backupResponse()
+	case routes.fullModeRestorePath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.fullModeRestoreResponse(request)
+	case routes.fullModeResetPath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		if !r.validFullModeSession(fullModeSessionFromRequest(request)) {
+			return jsonResponse(http.StatusUnauthorized, map[string]string{"error": "full-mode session is missing or expired"}), nil
+		}
+		return r.resetResponse(request)
 	case routes.statsPath, routes.resourceStatsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.statsResponse(request)
+	case routes.resourceStatsInitialPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.initialStatsResponse(request)
+	case routes.resourceStatsTrendPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.statsTrendResponse(request)
+	case routes.resourceStatsGroupsPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.groupsStatsResponse(request)
 	case routes.resourceRequestsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
@@ -216,24 +350,212 @@ func (r *pluginRuntime) handleManagement(raw []byte) (pluginapi.ManagementRespon
 }
 
 func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
 	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account")))
+	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity))
 	if err != nil {
 		status := errorHTTPStatus(err)
 		return jsonResponse(status, map[string]any{"error": err.Error()}), nil
 	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
+}
+
+func (r *pluginRuntime) statsFilter(request pluginapi.ManagementRequest, fullMode bool) (usageRange, usageFilter, error) {
+	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
+	if err != nil {
+		return usageRange{}, usageFilter{}, err
+	}
+	if r.store == nil {
+		return usageRange{}, usageFilter{}, withStatus(http.StatusServiceUnavailable, "storage is not initialized")
+	}
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	if err != nil {
+		return usageRange{}, usageFilter{}, err
+	}
+	return queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity), nil
+}
+
+func (r *pluginRuntime) initialStatsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	queryRange, filter, err := r.statsFilter(request, fullMode)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	stats, err := r.store.queryInitialStatsByFilter(queryRange, filter)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
+}
+
+func (r *pluginRuntime) statsTrendResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	queryRange, filter, err := r.statsFilter(request, fullMode)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	stats, err := r.store.queryStatsTrendByFilter(queryRange, filter)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
 	return jsonResponse(http.StatusOK, stats), nil
 }
 
+func (r *pluginRuntime) groupsStatsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	queryRange, filter, err := r.statsFilter(request, fullMode)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	filter.Model = normalizeDimension(request.Query.Get("model"))
+	excludedModels := make(map[string]struct{}, len(request.Query["exclude_model"]))
+	for _, model := range request.Query["exclude_model"] {
+		if model = normalizeDimension(model); model != "" {
+			excludedModels[model] = struct{}{}
+		}
+	}
+	stats, err := r.store.queryGroupsByFilter(queryRange, filter)
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	if len(excludedModels) > 0 {
+		items := stats.Items[:0]
+		for _, item := range stats.Items {
+			if _, excluded := excludedModels[compactModelName(item.Model)]; !excluded {
+				items = append(items, item)
+			}
+		}
+		stats.Items = items
+		stats.Total = len(items)
+	}
+	if err := sortGroupStats(stats.Items, request.Query.Get("sort"), request.Query.Get("direction")); err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	offset, err := parseNonNegativeQueryInt(request.Query.Get("offset"), 0, "offset")
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	limit, err := parseNonNegativeQueryInt(request.Query.Get("limit"), defaultRequestPageSize, "limit")
+	if err != nil || limit < 1 || limit > maxDashboardPageSize {
+		return jsonResponse(http.StatusBadRequest, map[string]any{"error": "limit must be an integer between 1 and 500"}), nil
+	}
+	if offset > stats.Total {
+		offset = stats.Total
+	}
+	end := offset + limit
+	if end > stats.Total {
+		end = stats.Total
+	}
+	stats.Items = stats.Items[offset:end]
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &stats, fullMode, r.crypto, generations), nil
+}
+
+func sortGroupStats(items []GroupStats, sortKey, direction string) error {
+	if sortKey == "" {
+		sortKey = "total_tokens"
+	}
+	if direction == "" {
+		direction = "desc"
+	}
+	if direction != "asc" && direction != "desc" {
+		return withStatus(http.StatusBadRequest, "direction must be asc or desc")
+	}
+	numeric := map[string]bool{"requests": true, "failed_requests": true, "input_tokens": true, "output_tokens": true, "reasoning_tokens": true, "cache_read_tokens": true, "cache_creation_tokens": true, "total_tokens": true, "average_latency_ns": true, "average_ttft_ns": true}
+	text := map[string]bool{"model": true, "provider": true, "api_key": true, "alias": true, "source": true, "executor_type": true, "auth_type": true, "service_tier": true, "reasoning_effort": true}
+	if !numeric[sortKey] && !text[sortKey] {
+		return withStatus(http.StatusBadRequest, "unsupported group sort %q", sortKey)
+	}
+	value := func(item GroupStats) string {
+		switch sortKey {
+		case "model":
+			return compactModelName(item.Model)
+		case "provider":
+			return item.Provider
+		case "api_key":
+			return item.APIKeyHash
+		case "alias":
+			return item.Alias
+		case "source":
+			return item.Source
+		case "executor_type":
+			return item.ExecutorType
+		case "auth_type":
+			return item.AuthType
+		case "service_tier":
+			return item.ServiceTier
+		case "reasoning_effort":
+			return item.ReasoningEffort
+		default:
+			return ""
+		}
+	}
+	number := func(item GroupStats) uint64 {
+		switch sortKey {
+		case "requests":
+			return item.Requests
+		case "failed_requests":
+			return item.FailedRequests
+		case "input_tokens":
+			return item.InputTokens
+		case "output_tokens":
+			return item.OutputTokens
+		case "reasoning_tokens":
+			return item.ReasoningTokens
+		case "cache_read_tokens":
+			return item.CacheReadTokens
+		case "cache_creation_tokens":
+			return item.CacheCreationTokens
+		case "total_tokens":
+			return item.TotalTokens
+		case "average_latency_ns":
+			return item.AverageLatencyNS
+		case "average_ttft_ns":
+			return item.AverageTTFTNS
+		default:
+			return 0
+		}
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		var less bool
+		if numeric[sortKey] {
+			less = number(items[i]) < number(items[j])
+		} else {
+			less = value(items[i]) < value(items[j])
+		}
+		if numeric[sortKey] && number(items[i]) == number(items[j]) || !numeric[sortKey] && value(items[i]) == value(items[j]) {
+			return compareDimensions(items[i].Dimensions, items[j].Dimensions) < 0
+		}
+		if direction == "desc" {
+			return !less
+		}
+		return less
+	})
+	return nil
+}
+
 func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
 	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
@@ -251,29 +573,63 @@ func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (p
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account")), request.Query.Get("result"))
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	return jsonResponse(http.StatusOK, page), nil
+	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), apiKeyIdentity), request.Query.Get("result"))
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &page, fullMode, r.crypto, generations), nil
 }
 
 func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
+	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
 	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
 	r.mu.RLock()
-	store := r.store
-	r.mu.RUnlock()
-	if store == nil {
+	defer r.mu.RUnlock()
+	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	costs, err := store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), request.Query.Get("auth_provider"), request.Query.Get("auth_account")))
+	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	return jsonResponse(http.StatusOK, costs), nil
+	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity))
+	if err != nil {
+		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	_, generations := r.store.APIKeyCryptoState()
+	return r.sensitiveJSONResponse(http.StatusOK, &costs, fullMode, r.crypto, generations), nil
+}
+
+func apiKeyIdentityFromRequest(request pluginapi.ManagementRequest, fullMode bool, store *Store) (string, error) {
+	ref := request.Query.Get("api_key_ref")
+	hash := request.Query.Get("api_key_hash")
+	if ref == "" && hash == "" {
+		return "", nil
+	}
+	if !fullMode {
+		return "", withStatus(http.StatusForbidden, "API key filtering requires a full-mode session")
+	}
+	if ref != "" && hash != "" {
+		return "", withStatus(http.StatusBadRequest, "api_key_ref and api_key_hash cannot be used together")
+	}
+	if ref != "" {
+		if _, _, ok := parseAPIKeyRef(ref); !ok {
+			return "", withStatus(http.StatusBadRequest, "api_key_ref is invalid")
+		}
+		return ref, nil
+	}
+	if !validAPIKeyHash(hash) {
+		return "", withStatus(http.StatusBadRequest, "api_key_hash must be 32 lowercase hexadecimal characters")
+	}
+	return store.ResolveAPIKeyHash(hash)
 }
 
 func (r *pluginRuntime) exchangeRateResponse() (pluginapi.ManagementResponse, error) {
@@ -525,14 +881,21 @@ func (r *pluginRuntime) restoreResponse(request pluginapi.ManagementRequest) (pl
 	if len(request.Body) > maxDatabaseBackupBytes {
 		return jsonResponse(http.StatusRequestEntityTooLarge, map[string]any{"error": "backup body is too large"}), nil
 	}
-	r.mu.RLock()
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	store := r.store
-	r.mu.RUnlock()
 	if store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
 	if err := store.RestoreBackup(request.Body); err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
+	}
+	generation, generations := store.APIKeyCryptoState()
+	if r.store == store {
+		r.apiKeyGeneration = generation
+		r.apiKeyGenerations = generations
 	}
 	return jsonResponse(http.StatusOK, map[string]any{
 		"restored":    true,
@@ -551,13 +914,21 @@ func (r *pluginRuntime) resetResponse(request pluginapi.ManagementRequest) (plug
 	if err := json.Unmarshal(request.Body, &confirmation); err != nil || confirmation.Confirm != "reset" {
 		return jsonResponse(http.StatusBadRequest, map[string]any{"error": `body must be {"confirm":"reset"}`}), nil
 	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.store == nil {
+	r.lifecycleMu.Lock()
+	defer r.lifecycleMu.Unlock()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	store := r.store
+	if store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	if err := r.store.Reset(); err != nil {
+	if err := store.Reset(); err != nil {
 		return jsonResponse(http.StatusInternalServerError, map[string]any{"error": err.Error()}), nil
+	}
+	generation, generations := store.APIKeyCryptoState()
+	if r.store == store {
+		r.apiKeyGeneration = generation
+		r.apiKeyGenerations = generations
 	}
 	return jsonResponse(http.StatusOK, map[string]any{
 		"reset":    true,

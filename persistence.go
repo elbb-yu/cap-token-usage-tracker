@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	bolt "go.etcd.io/bbolt"
 )
@@ -28,24 +30,47 @@ var (
 	modelPriceSettingsKey   = []byte("model_price_sync_settings")
 	modelPriceLastSyncKey   = []byte("model_price_last_sync")
 	dashboardPreferencesKey = []byte("dashboard_preferences")
+	cryptoKeyIDKey          = []byte("crypto_key_id")
+	apiKeyHashVersionKey    = []byte("api_key_hash_version")
+	apiKeyGenerationsKey    = []byte("api_key_crypto_generations")
+	apiKeyNextGenerationKey = []byte("api_key_next_generation")
+	apiKeyLabelsKey         = []byte("api_key_labels")
 )
 
-const persistenceSchemaVersion uint64 = 6
+const persistenceSchemaVersion uint64 = 9
+
+const (
+	maxAPIKeyLabels     = 10_000
+	maxAPIKeyLabelRunes = 120
+)
 
 type recordCommand struct {
 	usage normalizedUsage
 	resp  chan error
 }
 
+type statsQueryMode uint8
+
+const (
+	statsQueryFull statsQueryMode = iota
+	statsQueryInitial
+	statsQueryTrend
+	statsQueryGroups
+)
+
 type queryCommand struct {
 	queryRange usageRange
 	filter     usageFilter
+	mode       statsQueryMode
 	resp       chan queryResult
 }
 
 type queryResult struct {
-	stats StatsResponse
-	err   error
+	stats   StatsResponse
+	initial InitialStatsResponse
+	trend   StatsTrendResponse
+	groups  GroupStatsPage
+	err     error
 }
 
 type requestQueryCommand struct {
@@ -107,10 +132,40 @@ type preferencesResult struct {
 	err         error
 }
 
-type resetCommand struct{ resp chan error }
+type labelQueryCommand struct{ resp chan labelQueryResult }
+type labelQueryResult struct {
+	labels map[string]string
+	err    error
+}
+type labelSetCommand struct {
+	hash  string
+	label string
+	resp  chan error
+}
+type apiKeyResolveCommand struct {
+	hash string
+	resp chan apiKeyResolveResult
+}
+type apiKeyResolveResult struct {
+	ref string
+	err error
+}
+
+type resetCommand struct{ resp chan resetResult }
+type resetResult struct {
+	generation  uint64
+	generations map[uint64]APIKeyCryptoGeneration
+	err         error
+}
 type configCommand struct {
 	config Config
-	resp   chan error
+	crypto cryptoContext
+	resp   chan configResult
+}
+type configResult struct {
+	generation  uint64
+	generations map[uint64]APIKeyCryptoGeneration
+	err         error
 }
 type closeCommand struct{ resp chan error }
 
@@ -127,8 +182,10 @@ type restoreCommand struct {
 	resp   chan restoreResult
 }
 type restoreResult struct {
-	db  *bolt.DB
-	err error
+	db          *bolt.DB
+	generation  uint64
+	generations map[uint64]APIKeyCryptoGeneration
+	err         error
 }
 
 // limitedBuffer rejects WriteTo output once it exceeds maxDatabaseBackupBytes.
@@ -146,24 +203,28 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 }
 
 type Store struct {
-	db           *bolt.DB
-	lease        *storeLease
-	commands     chan any
-	done         chan struct{}
-	closeOnce    sync.Once
-	stateMu      sync.RWMutex
-	costMu       sync.Mutex
-	costCache    map[costCacheKey]CostResponse
-	costOrder    []costCacheKey
-	costFlights  map[costCacheKey]*costFlight
-	costScanHook func()
-	closed       bool
-	closeErr     error
+	db               *bolt.DB
+	lease            *storeLease
+	commands         chan any
+	done             chan struct{}
+	closeOnce        sync.Once
+	stateMu          sync.RWMutex
+	costMu           sync.Mutex
+	costCache        map[costCacheKey]CostResponse
+	costOrder        []costCacheKey
+	costFlights      map[costCacheKey]*costFlight
+	costScanHook     func()
+	closed           bool
+	closeErr         error
+	cryptoMu         sync.RWMutex
+	activeGeneration uint64
+	generations      map[uint64]APIKeyCryptoGeneration
 }
 
 type storeActor struct {
 	db                   *bolt.DB
 	config               Config
+	crypto               cryptoContext
 	data                 map[aggregateKey]Counters
 	dirty                map[aggregateKey]struct{}
 	since                time.Time
@@ -179,9 +240,21 @@ type storeActor struct {
 	lastPriceSync        *PriceSyncMetadata
 	costGeneration       uint64
 	dashboardPreferences DashboardPreferences
+	apiKeyCiphertexts    map[string]string
+	apiKeyLabels         map[string]string
+	activeGeneration     uint64
+	generations          map[uint64]APIKeyCryptoGeneration
 }
 
 func openStore(config Config) (*Store, error) {
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		return nil, err
+	}
+	return openStoreWithCrypto(config, crypto)
+}
+
+func openStoreWithCrypto(config Config, crypto cryptoContext) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(config.DataPath), 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
@@ -196,9 +269,12 @@ func openStore(config Config) (*Store, error) {
 	actor := &storeActor{
 		db:                   db,
 		config:               config,
+		crypto:               crypto,
 		data:                 make(map[aggregateKey]Counters),
 		dirty:                make(map[aggregateKey]struct{}),
 		dashboardPreferences: defaultDashboardPreferences(),
+		apiKeyCiphertexts:    make(map[string]string),
+		apiKeyLabels:         make(map[string]string),
 	}
 	if err := actor.initialize(); err != nil {
 		_ = db.Close()
@@ -207,12 +283,14 @@ func openStore(config Config) (*Store, error) {
 	}
 
 	store := &Store{
-		db:          db,
-		lease:       lease,
-		commands:    make(chan any, 256),
-		done:        make(chan struct{}),
-		costCache:   make(map[costCacheKey]CostResponse),
-		costFlights: make(map[costCacheKey]*costFlight),
+		db:               db,
+		lease:            lease,
+		commands:         make(chan any, 256),
+		done:             make(chan struct{}),
+		costCache:        make(map[costCacheKey]CostResponse),
+		costFlights:      make(map[costCacheKey]*costFlight),
+		activeGeneration: actor.activeGeneration,
+		generations:      cloneAPIKeyGenerations(actor.generations),
 	}
 	go store.run(actor)
 	go lease.monitor(store)
@@ -240,7 +318,7 @@ func (s *Store) queryStats(queryRange usageRange) (StatsResponse, error) {
 }
 
 func (s *Store) queryStatsBySource(queryRange usageRange, source string) (StatsResponse, error) {
-	return s.queryStatsByFilter(queryRange, newUsageFilter(source, "", ""))
+	return s.queryStatsByFilter(queryRange, newUsageFilter(source, ""))
 }
 
 func (s *Store) queryStatsByFilter(queryRange usageRange, filter usageFilter) (StatsResponse, error) {
@@ -250,6 +328,33 @@ func (s *Store) queryStatsByFilter(queryRange usageRange, filter usageFilter) (S
 	}
 	result := <-resp
 	return result.stats, result.err
+}
+
+func (s *Store) queryInitialStatsByFilter(queryRange usageRange, filter usageFilter) (InitialStatsResponse, error) {
+	resp := make(chan queryResult, 1)
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, mode: statsQueryInitial, resp: resp}); err != nil {
+		return InitialStatsResponse{}, err
+	}
+	result := <-resp
+	return result.initial, result.err
+}
+
+func (s *Store) queryStatsTrendByFilter(queryRange usageRange, filter usageFilter) (StatsTrendResponse, error) {
+	resp := make(chan queryResult, 1)
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, mode: statsQueryTrend, resp: resp}); err != nil {
+		return StatsTrendResponse{}, err
+	}
+	result := <-resp
+	return result.trend, result.err
+}
+
+func (s *Store) queryGroupsByFilter(queryRange usageRange, filter usageFilter) (GroupStatsPage, error) {
+	resp := make(chan queryResult, 1)
+	if err := s.send(queryCommand{queryRange: queryRange, filter: filter, mode: statsQueryGroups, resp: resp}); err != nil {
+		return GroupStatsPage{}, err
+	}
+	result := <-resp
+	return result.groups, result.err
 }
 
 func (s *Store) QueryRequests(rangeName string, offset, limit int, model string) (RequestPage, error) {
@@ -265,7 +370,7 @@ func (s *Store) queryRequestPage(queryRange usageRange, offset, limit int, model
 }
 
 func (s *Store) queryRequestPageBySource(queryRange usageRange, offset, limit int, model, source, resultFilter string) (RequestPage, error) {
-	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, "", ""), resultFilter)
+	return s.queryRequestPageByFilter(queryRange, offset, limit, model, newUsageFilter(source, ""), resultFilter)
 }
 
 func (s *Store) queryRequestPageByFilter(queryRange usageRange, offset, limit int, model string, filter usageFilter, resultFilter string) (RequestPage, error) {
@@ -284,6 +389,32 @@ func (s *Store) QueryDashboardPreferences() (DashboardPreferences, error) {
 	}
 	result := <-resp
 	return result.preferences, result.err
+}
+
+func (s *Store) APIKeyLabels() (map[string]string, error) {
+	resp := make(chan labelQueryResult, 1)
+	if err := s.send(labelQueryCommand{resp: resp}); err != nil {
+		return nil, err
+	}
+	result := <-resp
+	return result.labels, result.err
+}
+
+func (s *Store) SetAPIKeyLabel(hash, label string) error {
+	resp := make(chan error, 1)
+	if err := s.send(labelSetCommand{hash: hash, label: label, resp: resp}); err != nil {
+		return err
+	}
+	return <-resp
+}
+
+func (s *Store) ResolveAPIKeyHash(hash string) (string, error) {
+	resp := make(chan apiKeyResolveResult, 1)
+	if err := s.send(apiKeyResolveCommand{hash: hash, resp: resp}); err != nil {
+		return "", err
+	}
+	result := <-resp
+	return result.ref, result.err
 }
 
 func (s *Store) SaveDashboardPreferences(preferences DashboardPreferences) (DashboardPreferences, error) {
@@ -365,19 +496,49 @@ func (s *Store) ObservedModels() ([]string, error) {
 }
 
 func (s *Store) Reset() error {
-	resp := make(chan error, 1)
+	resp := make(chan resetResult, 1)
 	if err := s.send(resetCommand{resp: resp}); err != nil {
 		return err
 	}
-	return <-resp
+	result := <-resp
+	if result.err != nil {
+		return result.err
+	}
+	s.cryptoMu.Lock()
+	s.activeGeneration = result.generation
+	s.generations = cloneAPIKeyGenerations(result.generations)
+	s.cryptoMu.Unlock()
+	return nil
 }
 
 func (s *Store) Reconfigure(config Config) error {
-	resp := make(chan error, 1)
-	if err := s.send(configCommand{config: config, resp: resp}); err != nil {
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
 		return err
 	}
-	return <-resp
+	return s.ReconfigureWithCrypto(config, crypto)
+}
+
+func (s *Store) ReconfigureWithCrypto(config Config, crypto cryptoContext) error {
+	resp := make(chan configResult, 1)
+	if err := s.send(configCommand{config: config, crypto: crypto, resp: resp}); err != nil {
+		return err
+	}
+	result := <-resp
+	if result.err != nil {
+		return result.err
+	}
+	s.cryptoMu.Lock()
+	s.activeGeneration = result.generation
+	s.generations = cloneAPIKeyGenerations(result.generations)
+	s.cryptoMu.Unlock()
+	return nil
+}
+
+func (s *Store) APIKeyCryptoState() (uint64, map[uint64]APIKeyCryptoGeneration) {
+	s.cryptoMu.RLock()
+	defer s.cryptoMu.RUnlock()
+	return s.activeGeneration, cloneAPIKeyGenerations(s.generations)
 }
 
 func (s *Store) Close() error {
@@ -431,6 +592,10 @@ func (s *Store) RestoreBackup(backup []byte) error {
 	result := <-resp
 	if result.db != nil {
 		s.db = result.db
+		s.cryptoMu.Lock()
+		s.activeGeneration = result.generation
+		s.generations = cloneAPIKeyGenerations(result.generations)
+		s.cryptoMu.Unlock()
 		s.costMu.Lock()
 		s.costCache = make(map[costCacheKey]CostResponse)
 		s.costOrder = nil
@@ -472,7 +637,20 @@ func (s *Store) run(actor *storeActor) {
 						continue
 					}
 					stats, err := actor.queryExactStats(item.queryRange, item.filter, now)
-					item.resp <- queryResult{stats: stats, err: err}
+					if err != nil {
+						item.resp <- queryResult{err: err}
+						continue
+					}
+					switch item.mode {
+					case statsQueryInitial:
+						item.resp <- queryResult{initial: initialStatsFromFull(stats, item.queryRange)}
+					case statsQueryTrend:
+						item.resp <- queryResult{trend: trendStatsFromFull(stats, item.queryRange)}
+					case statsQueryGroups:
+						item.resp <- queryResult{groups: GroupStatsPage{SchemaVersion: 2, GeneratedAt: stats.GeneratedAt, Range: stats.Range, Items: stats.Groups, Total: len(stats.Groups)}}
+					default:
+						item.resp <- queryResult{stats: stats}
+					}
 					continue
 				}
 				if err := actor.retryFailedFlush(now); err != nil {
@@ -483,8 +661,17 @@ func (s *Store) run(actor *storeActor) {
 					item.resp <- queryResult{err: withStatus(400, "%v", err)}
 					continue
 				}
-				stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now)
-				item.resp <- queryResult{stats: stats}
+				switch item.mode {
+				case statsQueryInitial:
+					item.resp <- queryResult{initial: buildInitialStatsForRange(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)}
+				case statsQueryTrend:
+					item.resp <- queryResult{trend: buildStatsTrendForRange(actor.data, actor.since, item.queryRange, item.filter, now)}
+				case statsQueryGroups:
+					item.resp <- queryResult{groups: buildGroupsForRange(actor.data, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)}
+				default:
+					stats := buildStatsForRangeWithFilter(actor.data, actor.since, actor.lastUsed, item.queryRange, item.filter, now, actor.apiKeyCiphertexts)
+					item.resp <- queryResult{stats: stats}
+				}
 			case requestQueryCommand:
 				now := time.Now().UTC()
 				if err := actor.flush(now, true); err != nil {
@@ -499,6 +686,13 @@ func (s *Store) run(actor *storeActor) {
 			case savePreferencesCommand:
 				preferences, err := actor.saveDashboardPreferences(item.preferences)
 				item.resp <- preferencesResult{preferences: preferences, err: err}
+			case labelQueryCommand:
+				item.resp <- labelQueryResult{labels: cloneStringMap(actor.apiKeyLabels)}
+			case labelSetCommand:
+				item.resp <- actor.setAPIKeyLabel(item.hash, item.label)
+			case apiKeyResolveCommand:
+				ref, err := actor.resolveAPIKeyHash(item.hash)
+				item.resp <- apiKeyResolveResult{ref: ref, err: err}
 			case priceQueryCommand:
 				item.resp <- priceQueryResult{response: actor.priceBookResponse()}
 			case savePricesCommand:
@@ -536,20 +730,21 @@ func (s *Store) run(actor *storeActor) {
 				}, err: err}
 			case resetCommand:
 				if err := actor.retryFailedFlush(time.Now().UTC()); err != nil {
-					item.resp <- err
+					item.resp <- resetResult{err: err}
 					continue
 				}
-				item.resp <- actor.reset()
+				err := actor.reset()
+				item.resp <- resetResult{generation: actor.activeGeneration, generations: cloneAPIKeyGenerations(actor.generations), err: err}
 			case configCommand:
 				if err := actor.retryFailedFlush(time.Now().UTC()); err != nil {
-					item.resp <- err
+					item.resp <- configResult{err: err}
 					continue
 				}
-				err := actor.reconfigure(item.config)
+				err := actor.reconfigure(item.config, item.crypto)
 				if err == nil {
 					ticker.Reset(item.config.FlushInterval)
 				}
-				item.resp <- err
+				item.resp <- configResult{generation: actor.activeGeneration, generations: cloneAPIKeyGenerations(actor.generations), err: err}
 			case backupCommand:
 				now := time.Now().UTC()
 				if err := actor.flush(now, true); err != nil {
@@ -569,7 +764,7 @@ func (s *Store) run(actor *storeActor) {
 				item.resp <- backupResult{data: buffer.buf}
 			case restoreCommand:
 				db, err := actor.restoreBackup(item.backup)
-				item.resp <- restoreResult{db: db, err: err}
+				item.resp <- restoreResult{db: db, generation: actor.activeGeneration, generations: cloneAPIKeyGenerations(actor.generations), err: err}
 			case closeCommand:
 				flushErr := actor.flush(time.Now().UTC(), true)
 				closeErr := actor.db.Close()
@@ -584,6 +779,8 @@ func (s *Store) run(actor *storeActor) {
 
 func (a *storeActor) initialize() error {
 	now := time.Now().UTC()
+	var generations map[uint64]APIKeyCryptoGeneration
+	var activeGeneration uint64
 	if err := a.db.Update(func(tx *bolt.Tx) error {
 		meta, err := tx.CreateBucketIfNotExists(metaBucket)
 		if err != nil {
@@ -627,10 +824,26 @@ func (a *storeActor) initialize() error {
 		if err := migrateUsageSources(hours, requests, version); err != nil {
 			return err
 		}
+		if err := migrateAPIKeyCryptoSchema(meta, hours, requests, version, now); err != nil {
+			return err
+		}
+		loadedGenerations, loadErr := loadAPIKeyGenerations(meta)
+		if loadErr != nil {
+			return loadErr
+		}
+		generations = loadedGenerations
+		activatedGeneration, activatedGenerations, activateErr := activateAPIKeyGeneration(meta, generations, a.crypto, now)
+		if activateErr != nil {
+			return activateErr
+		}
+		activeGeneration = activatedGeneration
+		generations = activatedGenerations
 		return meta.Put(schemaKey, encodeUint64(persistenceSchemaVersion))
 	}); err != nil {
 		return fmt.Errorf("initialize database: %w", err)
 	}
+	a.generations = generations
+	a.activeGeneration = activeGeneration
 
 	return a.reload()
 }
@@ -652,14 +865,31 @@ func (a *storeActor) reload() error {
 	a.priceSyncSettings = defaultPriceSyncSettings()
 	a.lastPriceSync = nil
 	a.dashboardPreferences = defaultDashboardPreferences()
+	a.apiKeyCiphertexts = make(map[string]string)
+	a.apiKeyLabels = make(map[string]string)
+	a.generations = make(map[uint64]APIKeyCryptoGeneration)
+	a.activeGeneration = 0
 
-	return a.db.View(func(tx *bolt.Tx) error {
+	retainedHashes := make(map[string]struct{})
+	err := a.db.View(func(tx *bolt.Tx) error {
 		meta := tx.Bucket(metaBucket)
 		hours := tx.Bucket(hoursBucket)
 		requests := tx.Bucket(requestsBucket)
 		if meta == nil || hours == nil || requests == nil {
 			return errors.New("database buckets are missing")
 		}
+		if decodeUint64(meta.Get(schemaKey)) != persistenceSchemaVersion {
+			return errors.New("database schema is not initialized")
+		}
+		generations, err := loadAPIKeyGenerations(meta)
+		if err != nil {
+			return err
+		}
+		if err := validateAPIKeyGenerationReferences(hours, requests, generations); err != nil {
+			return err
+		}
+		a.generations = generations
+		a.activeGeneration = findAPIKeyGeneration(generations, a.crypto)
 		a.since = time.Unix(0, decodeInt64(meta.Get(sinceKey))).UTC()
 		a.nextRequestSeq = decodeUint64(meta.Get(requestSequenceKey))
 		if raw := meta.Get(modelPricesKey); len(raw) > 0 {
@@ -683,6 +913,16 @@ func (a *storeActor) reload() error {
 				return fmt.Errorf("validate dashboard preferences: %w", err)
 			}
 			a.dashboardPreferences = normalized
+		}
+		if raw := meta.Get(apiKeyLabelsKey); len(raw) > 0 {
+			var labels map[string]string
+			if err := json.Unmarshal(raw, &labels); err != nil {
+				return fmt.Errorf("decode API key labels: %w", err)
+			}
+			if err := validateAPIKeyLabels(labels); err != nil {
+				return fmt.Errorf("validate API key labels: %w", err)
+			}
+			a.apiKeyLabels = cloneStringMap(labels)
 		}
 		a.priceRevision = decodeUint64(meta.Get(modelPriceRevisionKey))
 		if a.priceRevision == 0 && len(a.modelPrices) > 0 {
@@ -709,7 +949,7 @@ func (a *storeActor) reload() error {
 		if raw := meta.Get(lastUsedKey); len(raw) > 0 {
 			a.lastUsed = time.Unix(0, decodeInt64(raw)).UTC()
 		}
-		return hours.ForEach(func(hourKey, value []byte) error {
+		if err := hours.ForEach(func(hourKey, value []byte) error {
 			if value != nil {
 				return nil
 			}
@@ -728,10 +968,540 @@ func (a *storeActor) reload() error {
 					return fmt.Errorf("decode counters: %w", err)
 				}
 				a.data[aggregateKey{Hour: hour, Dimensions: dimensions}] = counters
+				if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+					retainedHashes[ref] = struct{}{}
+				}
+				return nil
+			})
+		}); err != nil {
+			return err
+		}
+		return requests.ForEach(func(_, value []byte) error {
+			if value == nil {
+				return errors.New("request bucket contains nested bucket")
+			}
+			var request RequestDetail
+			if err := json.Unmarshal(value, &request); err != nil {
+				return fmt.Errorf("decode request detail: %w", err)
+			}
+			ref := apiKeyRef(request.APIKeyGeneration, request.APIKeyHash)
+			if ref != "" && request.APIKey != "" {
+				a.apiKeyCiphertexts[ref] = request.APIKey
+			}
+			if ref != "" {
+				retainedHashes[ref] = struct{}{}
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+	for hash := range a.apiKeyLabels {
+		if _, retained := retainedHashes[hash]; !retained {
+			return fmt.Errorf("API key label references data outside retention: %s", hash)
+		}
+	}
+	return nil
+}
+
+func databaseHasAPIKeyData(hours, requests *bolt.Bucket) (bool, error) {
+	if hours != nil {
+		found := false
+		err := hours.ForEach(func(hourKey, value []byte) error {
+			if found || value != nil {
+				return nil
+			}
+			hour := hours.Bucket(hourKey)
+			if hour == nil {
+				return nil
+			}
+			return hour.ForEach(func(key, value []byte) error {
+				if value == nil {
+					return nil
+				}
+				var dimensions Dimensions
+				if err := json.Unmarshal(key, &dimensions); err != nil {
+					return fmt.Errorf("decode dimensions while checking crypto identity: %w", err)
+				}
+				if dimensions.APIKey != "" || dimensions.APIKeyHash != "" {
+					found = true
+				}
 				return nil
 			})
 		})
+		if err != nil || found {
+			return found, err
+		}
+	}
+	if requests != nil {
+		found := false
+		err := requests.ForEach(func(_, value []byte) error {
+			if found || value == nil {
+				return nil
+			}
+			var request RequestDetail
+			if err := json.Unmarshal(value, &request); err != nil {
+				return fmt.Errorf("decode request while checking crypto identity: %w", err)
+			}
+			if request.APIKey != "" || request.APIKeyHash != "" {
+				found = true
+			}
+			return nil
+		})
+		return found, err
+	}
+	return false, nil
+}
+
+func cloneAPIKeyGenerations(values map[uint64]APIKeyCryptoGeneration) map[uint64]APIKeyCryptoGeneration {
+	cloned := make(map[uint64]APIKeyCryptoGeneration, len(values))
+	for id, generation := range values {
+		cloned[id] = generation
+	}
+	return cloned
+}
+
+func validAPIKeyKeyID(value string) bool {
+	return validAPIKeyHash(value)
+}
+
+func loadAPIKeyGenerations(meta *bolt.Bucket) (map[uint64]APIKeyCryptoGeneration, error) {
+	generations := make(map[uint64]APIKeyCryptoGeneration)
+	identities := make(map[string]uint64)
+	raw := meta.Get(apiKeyGenerationsKey)
+	if len(raw) == 0 {
+		return generations, nil
+	}
+	var stored []APIKeyCryptoGeneration
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, fmt.Errorf("decode API key crypto generations: %w", err)
+	}
+	for _, generation := range stored {
+		if generation.ID == 0 {
+			return nil, errors.New("API key crypto generation ID must not be zero")
+		}
+		if _, duplicate := generations[generation.ID]; duplicate {
+			return nil, fmt.Errorf("duplicate API key crypto generation %d", generation.ID)
+		}
+		if generation.IdentityMissing {
+			if generation.KeyID != "" || generation.HashVersion != "" {
+				return nil, fmt.Errorf("API key crypto generation %d has inconsistent missing identity", generation.ID)
+			}
+		} else if !validAPIKeyKeyID(generation.KeyID) || generation.HashVersion == "" {
+			return nil, fmt.Errorf("API key crypto generation %d is invalid", generation.ID)
+		}
+		if !generation.IdentityMissing {
+			identity := generation.KeyID + "\x00" + generation.HashVersion
+			if existing := identities[identity]; existing != 0 {
+				return nil, fmt.Errorf("API key crypto generations %d and %d have duplicate identities", existing, generation.ID)
+			}
+			identities[identity] = generation.ID
+		}
+		generations[generation.ID] = generation
+	}
+	return generations, nil
+}
+
+func saveAPIKeyGenerations(meta *bolt.Bucket, generations map[uint64]APIKeyCryptoGeneration) error {
+	values := make([]APIKeyCryptoGeneration, 0, len(generations))
+	for _, generation := range generations {
+		values = append(values, generation)
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].ID < values[j].ID })
+	encoded, err := json.Marshal(values)
+	if err != nil {
+		return fmt.Errorf("encode API key crypto generations: %w", err)
+	}
+	if err := meta.Put(apiKeyGenerationsKey, encoded); err != nil {
+		return err
+	}
+	return nil
+}
+
+func findAPIKeyGeneration(generations map[uint64]APIKeyCryptoGeneration, crypto cryptoContext) uint64 {
+	if !crypto.enabled {
+		return 0
+	}
+	for id, generation := range generations {
+		if !generation.IdentityMissing && generation.KeyID == crypto.keyID && generation.HashVersion == apiKeyHashVersion {
+			return id
+		}
+	}
+	return 0
+}
+
+func activateAPIKeyGeneration(meta *bolt.Bucket, generations map[uint64]APIKeyCryptoGeneration, crypto cryptoContext, now time.Time) (uint64, map[uint64]APIKeyCryptoGeneration, error) {
+	rawNext := meta.Get(apiKeyNextGenerationKey)
+	if len(rawNext) != 0 && len(rawNext) != 8 {
+		return 0, nil, errors.New("invalid API key crypto generation sequence metadata")
+	}
+	if !crypto.enabled {
+		return 0, generations, nil
+	}
+	if id := findAPIKeyGeneration(generations, crypto); id != 0 {
+		return id, generations, nil
+	}
+	next := decodeUint64(rawNext)
+	if next == 0 {
+		next = 1
+		for id := range generations {
+			if id == ^uint64(0) {
+				return 0, nil, errors.New("API key crypto generation sequence exhausted")
+			}
+			if id >= next {
+				next = id + 1
+			}
+		}
+	} else {
+		for id := range generations {
+			if id >= next {
+				return 0, nil, fmt.Errorf("API key next generation %d does not follow existing generation %d", next, id)
+			}
+		}
+	}
+	if next == 0 || next == ^uint64(0) {
+		return 0, nil, errors.New("API key crypto generation sequence exhausted")
+	}
+	updated := cloneAPIKeyGenerations(generations)
+	updated[next] = APIKeyCryptoGeneration{ID: next, KeyID: crypto.keyID, HashVersion: apiKeyHashVersion, CreatedAt: now.UTC()}
+	if err := saveAPIKeyGenerations(meta, updated); err != nil {
+		return 0, nil, err
+	}
+	if err := meta.Put(apiKeyNextGenerationKey, encodeUint64(next+1)); err != nil {
+		return 0, nil, err
+	}
+	return next, updated, nil
+}
+
+func migrateAPIKeyCryptoSchema(meta, hours, requests *bolt.Bucket, version uint64, now time.Time) error {
+	if version >= 8 {
+		generations, err := loadAPIKeyGenerations(meta)
+		if err != nil {
+			return err
+		}
+		return validateAPIKeyGenerationReferences(hours, requests, generations)
+	}
+	hasData, err := databaseHasAPIKeyData(hours, requests)
+	if err != nil {
+		return err
+	}
+	keyID := string(meta.Get(cryptoKeyIDKey))
+	hashVersion := string(meta.Get(apiKeyHashVersionKey))
+	hasIdentity := validAPIKeyKeyID(keyID) && hashVersion != ""
+	generations := make(map[uint64]APIKeyCryptoGeneration)
+	legacyGeneration := uint64(0)
+	if hasData || keyID != "" || hashVersion != "" {
+		legacyGeneration = 1
+		generation := APIKeyCryptoGeneration{ID: legacyGeneration, CreatedAt: now.UTC(), IdentityMissing: !hasIdentity}
+		if hasIdentity {
+			generation.KeyID = keyID
+			generation.HashVersion = hashVersion
+		}
+		generations[legacyGeneration] = generation
+	}
+	if legacyGeneration != 0 {
+		if err := migrateLegacyAPIKeyRecords(hours, requests, legacyGeneration); err != nil {
+			return err
+		}
+		if raw := meta.Get(apiKeyLabelsKey); len(raw) > 0 {
+			var labels map[string]string
+			if err := json.Unmarshal(raw, &labels); err != nil {
+				return fmt.Errorf("decode legacy API key labels: %w", err)
+			}
+			migrated := make(map[string]string, len(labels))
+			for hash, label := range labels {
+				ref := apiKeyRef(legacyGeneration, hash)
+				if ref == "" {
+					return fmt.Errorf("invalid legacy API key label reference %q", hash)
+				}
+				migrated[ref] = label
+			}
+			encoded, err := json.Marshal(migrated)
+			if err != nil {
+				return err
+			}
+			if err := meta.Put(apiKeyLabelsKey, encoded); err != nil {
+				return err
+			}
+		}
+	}
+	if err := saveAPIKeyGenerations(meta, generations); err != nil {
+		return err
+	}
+	next := legacyGeneration + 1
+	if next == 1 {
+		next = 1
+	}
+	if err := meta.Put(apiKeyNextGenerationKey, encodeUint64(next)); err != nil {
+		return err
+	}
+	if err := meta.Delete(cryptoKeyIDKey); err != nil {
+		return err
+	}
+	if err := meta.Delete(apiKeyHashVersionKey); err != nil {
+		return err
+	}
+	return validateAPIKeyGenerationReferences(hours, requests, generations)
+}
+
+func migrateLegacyAPIKeyRecords(hours, requests *bolt.Bucket, generation uint64) error {
+	if err := hours.ForEach(func(hourKey, value []byte) error {
+		if value != nil {
+			return nil
+		}
+		hour := hours.Bucket(hourKey)
+		if hour == nil {
+			return nil
+		}
+		type entry struct {
+			dimensions Dimensions
+			counters   Counters
+		}
+		entries := make([]entry, 0)
+		if err := hour.ForEach(func(key, value []byte) error {
+			if value == nil {
+				return errors.New("hour bucket contains nested bucket")
+			}
+			var dimensions Dimensions
+			var counters Counters
+			if err := json.Unmarshal(key, &dimensions); err != nil {
+				return fmt.Errorf("decode legacy dimensions: %w", err)
+			}
+			if err := json.Unmarshal(value, &counters); err != nil {
+				return fmt.Errorf("decode legacy counters: %w", err)
+			}
+			if dimensions.APIKeyHash != "" && dimensions.APIKeyGeneration == 0 {
+				dimensions.APIKeyGeneration = generation
+			}
+			entries = append(entries, entry{dimensions: dimensions, counters: counters})
+			return nil
+		}); err != nil {
+			return err
+		}
+		cursor := hour.Cursor()
+		for key, _ := cursor.First(); key != nil; key, _ = cursor.Next() {
+			if err := cursor.Delete(); err != nil {
+				return err
+			}
+		}
+		merged := make(map[Dimensions]Counters)
+		for _, item := range entries {
+			combined := merged[item.dimensions]
+			combined.add(item.counters)
+			merged[item.dimensions] = combined
+		}
+		for dimensions, counters := range merged {
+			key, err := json.Marshal(dimensions)
+			if err != nil {
+				return err
+			}
+			value, err := json.Marshal(counters)
+			if err != nil {
+				return err
+			}
+			if err := hour.Put(key, value); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return requests.ForEach(func(key, value []byte) error {
+		if value == nil {
+			return errors.New("request bucket contains nested bucket")
+		}
+		var request RequestDetail
+		if err := json.Unmarshal(value, &request); err != nil {
+			return fmt.Errorf("decode legacy request: %w", err)
+		}
+		if request.APIKeyHash == "" || request.APIKeyGeneration != 0 {
+			return nil
+		}
+		request.APIKeyGeneration = generation
+		encoded, err := json.Marshal(request)
+		if err != nil {
+			return err
+		}
+		return requests.Put(key, encoded)
 	})
+}
+
+func validateAPIKeyGenerationReferences(hours, requests *bolt.Bucket, generations map[uint64]APIKeyCryptoGeneration) error {
+	validate := func(dimensions Dimensions) error {
+		if dimensions.APIKeyHash == "" {
+			if dimensions.APIKeyGeneration != 0 || dimensions.APIKey != "" {
+				return errors.New("API key generation or ciphertext exists without fingerprint")
+			}
+			return nil
+		}
+		if !validAPIKeyHash(dimensions.APIKeyHash) || dimensions.APIKeyGeneration == 0 {
+			return errors.New("API key fingerprint has no valid crypto generation")
+		}
+		if _, ok := generations[dimensions.APIKeyGeneration]; !ok {
+			return fmt.Errorf("API key references unknown crypto generation %d", dimensions.APIKeyGeneration)
+		}
+		return nil
+	}
+	if err := hours.ForEach(func(hourKey, value []byte) error {
+		if value != nil {
+			return nil
+		}
+		hour := hours.Bucket(hourKey)
+		return hour.ForEach(func(key, value []byte) error {
+			var dimensions Dimensions
+			if err := json.Unmarshal(key, &dimensions); err != nil {
+				return fmt.Errorf("decode dimensions while validating API key generation: %w", err)
+			}
+			return validate(dimensions)
+		})
+	}); err != nil {
+		return err
+	}
+	return requests.ForEach(func(_, value []byte) error {
+		if value == nil {
+			return errors.New("request bucket contains nested bucket")
+		}
+		var request RequestDetail
+		if err := json.Unmarshal(value, &request); err != nil {
+			return fmt.Errorf("decode request while validating API key generation: %w", err)
+		}
+		return validate(request.Dimensions)
+	})
+}
+
+func cloneStringMap(values map[string]string) map[string]string {
+	cloned := make(map[string]string, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func validAPIKeyHash(hash string) bool {
+	if len(hash) != 32 {
+		return false
+	}
+	decoded, err := hex.DecodeString(hash)
+	return err == nil && len(decoded) == 16 && strings.ToLower(hash) == hash
+}
+
+func validateAPIKeyLabel(ref, label string) error {
+	if _, _, ok := parseAPIKeyRef(ref); !ok {
+		return errors.New("api key ref must identify a valid crypto generation and fingerprint")
+	}
+	if !utf8.ValidString(label) {
+		return errors.New("api key label must be valid UTF-8")
+	}
+	if utf8.RuneCountInString(label) > maxAPIKeyLabelRunes {
+		return fmt.Errorf("api key label must not exceed %d characters", maxAPIKeyLabelRunes)
+	}
+	return nil
+}
+
+func validateAPIKeyLabels(labels map[string]string) error {
+	if len(labels) > maxAPIKeyLabels {
+		return fmt.Errorf("api key labels exceed limit %d", maxAPIKeyLabels)
+	}
+	for ref, label := range labels {
+		if label == "" {
+			return errors.New("stored api key labels must not be empty")
+		}
+		if err := validateAPIKeyLabel(ref, label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (a *storeActor) retainedAPIKeyRefs() map[string]struct{} {
+	refs := make(map[string]struct{})
+	for key := range a.data {
+		if ref := apiKeyRef(key.Dimensions.APIKeyGeneration, key.Dimensions.APIKeyHash); ref != "" {
+			refs[ref] = struct{}{}
+		}
+	}
+	for _, request := range a.pendingRequests {
+		if ref := apiKeyRef(request.APIKeyGeneration, request.APIKeyHash); ref != "" {
+			refs[ref] = struct{}{}
+		}
+	}
+	return refs
+}
+
+func (a *storeActor) hasRetainedAPIKeyRef(ref string) bool {
+	_, exists := a.retainedAPIKeyRefs()[ref]
+	return exists
+}
+
+func (a *storeActor) resolveAPIKeyHash(hash string) (string, error) {
+	if !validAPIKeyHash(hash) {
+		return "", withStatus(400, "api_key_hash must be 32 lowercase hexadecimal characters")
+	}
+	var match string
+	for ref := range a.retainedAPIKeyRefs() {
+		_, candidate, _ := parseAPIKeyRef(ref)
+		if candidate != hash {
+			continue
+		}
+		if match != "" && match != ref {
+			return "", withStatus(400, "api_key_hash matches multiple crypto generations; use api_key_ref")
+		}
+		match = ref
+	}
+	if match == "" {
+		return "", withStatus(404, "api_key_hash is not present in retained data")
+	}
+	return match, nil
+}
+
+func (a *storeActor) saveAPIKeyLabels(labels map[string]string) error {
+	if err := validateAPIKeyLabels(labels); err != nil {
+		return err
+	}
+	encoded, err := json.Marshal(labels)
+	if err != nil {
+		return fmt.Errorf("encode API key labels: %w", err)
+	}
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		if len(labels) == 0 {
+			return meta.Delete(apiKeyLabelsKey)
+		}
+		return meta.Put(apiKeyLabelsKey, encoded)
+	}); err != nil {
+		return fmt.Errorf("save API key labels: %w", err)
+	}
+	return nil
+}
+
+func (a *storeActor) setAPIKeyLabel(ref, label string) error {
+	if err := validateAPIKeyLabel(ref, label); err != nil {
+		return withStatus(400, "%v", err)
+	}
+	candidate := cloneStringMap(a.apiKeyLabels)
+	if label == "" {
+		delete(candidate, ref)
+	} else {
+		if !a.hasRetainedAPIKeyRef(ref) {
+			return withStatus(404, "api key ref is not present in retained data")
+		}
+		if len(candidate) >= maxAPIKeyLabels {
+			if _, replacing := candidate[ref]; !replacing {
+				return withStatus(409, "api key label limit reached")
+			}
+		}
+		candidate[ref] = label
+	}
+	if err := a.saveAPIKeyLabels(candidate); err != nil {
+		return err
+	}
+	a.apiKeyLabels = candidate
+	return nil
 }
 
 func recoverInterruptedRestore(dataPath string) error {
@@ -772,6 +1542,10 @@ func recoverInterruptedRestore(dataPath string) error {
 }
 
 func validateRestoreDatabase(path string) error {
+	return validateRestoreDatabaseWithCrypto(path, cryptoContext{})
+}
+
+func validateRestoreDatabaseWithCrypto(path string, crypto cryptoContext) error {
 	db, err := bolt.Open(path, 0o600, &bolt.Options{ReadOnly: true, Timeout: storeOpenProbeTimeout})
 	if err != nil {
 		return fmt.Errorf("open staged restore database: %w", err)
@@ -797,6 +1571,13 @@ func validateRestoreDatabase(path string) error {
 		version := decodeUint64(meta.Get(schemaKey))
 		if version != persistenceSchemaVersion {
 			return fmt.Errorf("unsupported restore schema version %d", version)
+		}
+		generations, err := loadAPIKeyGenerations(meta)
+		if err != nil {
+			return err
+		}
+		if err := validateAPIKeyGenerationReferences(hours, requests, generations); err != nil {
+			return err
 		}
 		if raw := meta.Get(sinceKey); len(raw) != 0 && len(raw) != 8 {
 			return errors.New("invalid since metadata")
@@ -843,6 +1624,24 @@ func validateRestoreDatabase(path string) error {
 				return fmt.Errorf("validate dashboard preferences: %w", err)
 			}
 		}
+		if raw := meta.Get(apiKeyLabelsKey); len(raw) > 0 {
+			var labels map[string]string
+			if err := json.Unmarshal(raw, &labels); err != nil {
+				return fmt.Errorf("decode API key labels: %w", err)
+			}
+			if err := validateAPIKeyLabels(labels); err != nil {
+				return fmt.Errorf("validate API key labels: %w", err)
+			}
+			retained, _, err := retainedAPIKeyState(hours, requests)
+			if err != nil {
+				return err
+			}
+			for hash := range labels {
+				if _, ok := retained[hash]; !ok {
+					return fmt.Errorf("API key label references data outside retention: %s", hash)
+				}
+			}
+		}
 		return requests.ForEach(func(key, value []byte) error {
 			if len(key) != 16 {
 				return fmt.Errorf("invalid request key length %d", len(key))
@@ -857,6 +1656,26 @@ func validateRestoreDatabase(path string) error {
 			return nil
 		})
 	})
+}
+
+func migrateRestoreDatabase(path string, config Config, crypto cryptoContext) error {
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: storeOpenProbeTimeout})
+	if err != nil {
+		return fmt.Errorf("open staged restore database for migration: %w", err)
+	}
+	actor := &storeActor{
+		db:                   db,
+		config:               config,
+		crypto:               crypto,
+		data:                 make(map[aggregateKey]Counters),
+		dirty:                make(map[aggregateKey]struct{}),
+		dashboardPreferences: defaultDashboardPreferences(),
+		apiKeyCiphertexts:    make(map[string]string),
+	}
+	initializeErr := actor.initialize()
+	syncErr := db.Sync()
+	closeErr := db.Close()
+	return errors.Join(initializeErr, syncErr, closeErr)
 }
 
 // syncDir fsyncs a directory so directory entries (creates/renames) become durable.
@@ -906,7 +1725,10 @@ func (a *storeActor) restoreBackup(backup []byte) (*bolt.DB, error) {
 	if err := staged.Close(); err != nil {
 		return a.db, fmt.Errorf("close staged restore database: %w", err)
 	}
-	if err := validateRestoreDatabase(stagedPath); err != nil {
+	if err := migrateRestoreDatabase(stagedPath, a.config, a.crypto); err != nil {
+		return a.db, withStatus(400, "invalid backup database: %v", err)
+	}
+	if err := validateRestoreDatabaseWithCrypto(stagedPath, a.crypto); err != nil {
 		return a.db, withStatus(400, "invalid backup database: %v", err)
 	}
 
@@ -993,7 +1815,31 @@ func (a *storeActor) restoreBackup(backup []byte) (*bolt.DB, error) {
 }
 
 func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
-	if version >= 5 {
+	type legacyDimensions struct {
+		Dimensions
+		AuthProvider string `json:"auth_provider"`
+		AuthAccount  string `json:"auth_account"`
+	}
+
+	type legacyRequestDetail struct {
+		Sequence uint64    `json:"sequence"`
+		Time     time.Time `json:"time"`
+		legacyDimensions
+		Counters
+		Result        string         `json:"result"`
+		LatencyNS     uint64         `json:"latency_ns"`
+		TTFTNS        uint64         `json:"ttft_ns"`
+		GenerationNS  uint64         `json:"generation_ns"`
+		TPS           float64        `json:"tps"`
+		CacheHit      bool           `json:"cache_hit"`
+		EstimatedCost *EstimatedCost `json:"estimated_cost,omitempty"`
+	}
+
+	toCurrentRequest := func(request legacyRequestDetail) RequestDetail {
+		return RequestDetail{Sequence: request.Sequence, Time: request.Time, Dimensions: request.Dimensions, Counters: request.Counters, Result: request.Result, LatencyNS: request.LatencyNS, TTFTNS: request.TTFTNS, GenerationNS: request.GenerationNS, TPS: request.TPS, CacheHit: request.CacheHit, EstimatedCost: request.EstimatedCost}
+	}
+
+	if version >= persistenceSchemaVersion {
 		return nil
 	}
 	if hours != nil {
@@ -1018,7 +1864,7 @@ func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
 				if value == nil {
 					return nil
 				}
-				var dimensions Dimensions
+				var dimensions legacyDimensions
 				if err := json.Unmarshal(key, &dimensions); err != nil {
 					return fmt.Errorf("decode dimensions for source migration: %w", err)
 				}
@@ -1026,8 +1872,9 @@ func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
 				if err := json.Unmarshal(value, &counters); err != nil {
 					return fmt.Errorf("decode counters for source migration: %w", err)
 				}
-				sanitized := sanitizeDimensionsSource(dimensions)
-				changed = changed || sanitized != dimensions
+				sanitized := dimensions.Dimensions
+				sanitized.Source = canonicalUsageSourceWithIdentity(sanitized, dimensions.AuthProvider, dimensions.AuthAccount)
+				changed = true
 				combined := merged[sanitized]
 				combined.add(counters)
 				merged[sanitized] = combined
@@ -1069,16 +1916,13 @@ func migrateUsageSources(hours, requests *bolt.Bucket, version uint64) error {
 			if value == nil {
 				return nil
 			}
-			var request RequestDetail
+			var request legacyRequestDetail
 			if err := json.Unmarshal(value, &request); err != nil {
 				return fmt.Errorf("decode request for source migration: %w", err)
 			}
-			sanitized := sanitizeDimensionsSource(request.Dimensions)
-			if sanitized == request.Dimensions {
-				return nil
-			}
-			request.Dimensions = sanitized
-			encoded, err := json.Marshal(request)
+			current := toCurrentRequest(request)
+			current.Source = canonicalUsageSourceWithIdentity(current.Dimensions, request.AuthProvider, request.AuthAccount)
+			encoded, err := json.Marshal(current)
 			if err != nil {
 				return err
 			}
@@ -1160,9 +2004,20 @@ func migratePriceMetadata(meta *bolt.Bucket, version uint64) error {
 
 func (a *storeActor) record(usage normalizedUsage) error {
 	usage.Dimensions = sanitizeDimensionsSource(usage.Dimensions)
+	if usage.Dimensions.APIKey != "" || usage.Dimensions.APIKeyHash != "" || usage.Dimensions.APIKeyGeneration != 0 {
+		if usage.Dimensions.APIKey == "" || !validAPIKeyHash(usage.Dimensions.APIKeyHash) || usage.Dimensions.APIKeyGeneration == 0 {
+			return errors.New("API key ciphertext, fingerprint, and generation must be recorded together")
+		}
+		if _, ok := a.generations[usage.Dimensions.APIKeyGeneration]; !ok {
+			return fmt.Errorf("API key references unregistered crypto generation %d", usage.Dimensions.APIKeyGeneration)
+		}
+	}
+	aggregateDimensions := usage.Dimensions
+	ciphertext := aggregateDimensions.APIKey
+	aggregateDimensions.APIKey = ""
 	key := aggregateKey{
 		Hour:       usage.RequestedAt.UTC().Truncate(time.Minute).Unix(),
-		Dimensions: usage.Dimensions,
+		Dimensions: aggregateDimensions,
 	}
 	counters := a.data[key]
 	counters.add(countersForUsage(usage))
@@ -1173,6 +2028,9 @@ func (a *storeActor) record(usage normalizedUsage) error {
 		a.nextRequestSeq = 1
 	}
 	a.pendingRequests = append(a.pendingRequests, requestDetailForUsage(usage, a.nextRequestSeq))
+	if ref := apiKeyRef(aggregateDimensions.APIKeyGeneration, aggregateDimensions.APIKeyHash); ciphertext != "" && ref != "" {
+		a.apiKeyCiphertexts[ref] = ciphertext
+	}
 	a.pending++
 	if a.lastUsed.IsZero() || usage.RequestedAt.After(a.lastUsed) {
 		a.lastUsed = usage.RequestedAt
@@ -1206,6 +2064,8 @@ func (a *storeActor) flush(now time.Time, force bool) error {
 			nextSince = cutoffTime
 		}
 	}
+	var nextCiphertexts map[string]string
+	var nextLabels map[string]string
 	err := a.db.Update(func(tx *bolt.Tx) error {
 		meta := tx.Bucket(metaBucket)
 		hours := tx.Bucket(hoursBucket)
@@ -1254,7 +2114,32 @@ func (a *storeActor) flush(now time.Time, force bool) error {
 			if err := pruneHoursBucket(hours, cutoff); err != nil {
 				return err
 			}
-			return pruneRequestsBucket(requests, time.Unix(cutoff, 0).UTC().UnixNano())
+			if err := pruneRequestsBucket(requests, time.Unix(cutoff, 0).UTC().UnixNano()); err != nil {
+				return err
+			}
+			retained, ciphertexts, err := retainedAPIKeyState(hours, requests)
+			if err != nil {
+				return err
+			}
+			labels := cloneStringMap(a.apiKeyLabels)
+			for hash := range labels {
+				if _, ok := retained[hash]; !ok {
+					delete(labels, hash)
+				}
+			}
+			encoded, err := json.Marshal(labels)
+			if err != nil {
+				return err
+			}
+			if len(labels) == 0 {
+				if err := meta.Delete(apiKeyLabelsKey); err != nil {
+					return err
+				}
+			} else if err := meta.Put(apiKeyLabelsKey, encoded); err != nil {
+				return err
+			}
+			nextCiphertexts = ciphertexts
+			nextLabels = labels
 		}
 		return nil
 	})
@@ -1274,11 +2159,13 @@ func (a *storeActor) flush(now time.Time, force bool) error {
 			}
 		}
 		a.lastPruneAt = now
+		a.apiKeyCiphertexts = nextCiphertexts
+		a.apiKeyLabels = nextLabels
 	}
 	return nil
 }
 
-func (a *storeActor) reconfigure(config Config) error {
+func (a *storeActor) reconfigure(config Config, crypto cryptoContext) error {
 	if config.DataPath != a.config.DataPath {
 		return errors.New("data_path changes require opening a new store")
 	}
@@ -1287,15 +2174,30 @@ func (a *storeActor) reconfigure(config Config) error {
 		return err
 	}
 	previous := a.config
+	previousCrypto := a.crypto
 	previousPrune := a.lastPruneAt
 	a.config = config
+	a.crypto = crypto
 	a.lastPruneAt = time.Time{}
-	if err := a.flush(time.Now().UTC(), true); err != nil {
+	var generations map[uint64]APIKeyCryptoGeneration
+	var generation uint64
+	if err := a.db.Update(func(tx *bolt.Tx) error {
+		meta := tx.Bucket(metaBucket)
+		if meta == nil {
+			return errors.New("metadata bucket is missing")
+		}
+		var err error
+		generation, generations, err = activateAPIKeyGeneration(meta, a.generations, crypto, time.Now().UTC())
+		return err
+	}); err != nil {
 		a.config = previous
+		a.crypto = previousCrypto
 		a.lastPruneAt = previousPrune
 		a.lastFlushErr = err
 		return err
 	}
+	a.generations = generations
+	a.activeGeneration = generation
 	a.lastFlushErr = nil
 	a.costGeneration++
 	return nil
@@ -1491,6 +2393,21 @@ func (a *storeActor) reset() error {
 		if err := meta.Put(requestSequenceKey, encodeUint64(0)); err != nil {
 			return err
 		}
+		if err := meta.Delete(cryptoKeyIDKey); err != nil {
+			return err
+		}
+		if err := meta.Delete(apiKeyHashVersionKey); err != nil {
+			return err
+		}
+		if err := meta.Delete(apiKeyGenerationsKey); err != nil {
+			return err
+		}
+		if err := meta.Delete(apiKeyNextGenerationKey); err != nil {
+			return err
+		}
+		if err := meta.Delete(apiKeyLabelsKey); err != nil {
+			return err
+		}
 		return meta.Delete(lastUsedKey)
 	}); err != nil {
 		return fmt.Errorf("reset database: %w", err)
@@ -1503,6 +2420,19 @@ func (a *storeActor) reset() error {
 	a.lastFlushErr = nil
 	a.since = now
 	a.lastUsed = time.Time{}
+	a.apiKeyCiphertexts = make(map[string]string)
+	a.apiKeyLabels = make(map[string]string)
+	a.generations = make(map[uint64]APIKeyCryptoGeneration)
+	a.activeGeneration = 0
+	if a.crypto.enabled {
+		if err := a.db.Update(func(tx *bolt.Tx) error {
+			var err error
+			a.activeGeneration, a.generations, err = activateAPIKeyGeneration(tx.Bucket(metaBucket), a.generations, a.crypto, now)
+			return err
+		}); err != nil {
+			return fmt.Errorf("reset API key generation: %w", err)
+		}
+	}
 	a.costGeneration++
 	return nil
 }
@@ -1617,6 +2547,7 @@ func (a *storeActor) queryExactStats(queryRange usageRange, filter usageFilter, 
 				return fmt.Errorf("decode request detail: %w", err)
 			}
 			dimensions := sanitizeDimensionsSource(item.Dimensions)
+			dimensions.APIKey = ""
 			counters := item.Counters
 			if item.LatencyNS > 0 {
 				counters.TotalLatencyNS = item.LatencyNS
@@ -1636,7 +2567,7 @@ func (a *storeActor) queryExactStats(queryRange usageRange, filter usageFilter, 
 	if err != nil {
 		return StatsResponse{}, fmt.Errorf("query exact stats: %w", err)
 	}
-	return buildStatsForRangeWithFilter(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, filter, now), nil
+	return buildStatsForRangeWithFilter(data, a.since, a.lastUsed, usageRange{Name: queryRange.Name}, filter, now, a.apiKeyCiphertexts), nil
 }
 
 func retentionCutoff(config Config, now time.Time) int64 {
@@ -1682,6 +2613,54 @@ func pruneRequestsBucket(requests *bolt.Bucket, cutoffUnixNano int64) error {
 		}
 	}
 	return nil
+}
+
+func retainedAPIKeyState(hours, requests *bolt.Bucket) (map[string]struct{}, map[string]string, error) {
+	hashes := make(map[string]struct{})
+	ciphertexts := make(map[string]string)
+	if err := hours.ForEach(func(hourKey, value []byte) error {
+		if value != nil {
+			return nil
+		}
+		hour := hours.Bucket(hourKey)
+		if hour == nil {
+			return nil
+		}
+		return hour.ForEach(func(key, value []byte) error {
+			if value == nil {
+				return nil
+			}
+			var dimensions Dimensions
+			if err := json.Unmarshal(key, &dimensions); err != nil {
+				return fmt.Errorf("decode dimensions while pruning API key state: %w", err)
+			}
+			if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+				hashes[ref] = struct{}{}
+			}
+			return nil
+		})
+	}); err != nil {
+		return nil, nil, err
+	}
+	if err := requests.ForEach(func(_, value []byte) error {
+		if value == nil {
+			return errors.New("request bucket contains nested bucket")
+		}
+		var request RequestDetail
+		if err := json.Unmarshal(value, &request); err != nil {
+			return fmt.Errorf("decode request while pruning API key state: %w", err)
+		}
+		if ref := apiKeyRef(request.APIKeyGeneration, request.APIKeyHash); ref != "" {
+			hashes[ref] = struct{}{}
+			if request.APIKey != "" {
+				ciphertexts[ref] = request.APIKey
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, nil, err
+	}
+	return hashes, ciphertexts, nil
 }
 
 func encodeUint64(value uint64) []byte {

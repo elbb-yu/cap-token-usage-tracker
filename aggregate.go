@@ -9,40 +9,66 @@ import (
 )
 
 type Dimensions struct {
-	Provider        string `json:"provider"`
-	ExecutorType    string `json:"executor_type"`
-	Model           string `json:"model"`
-	Alias           string `json:"alias"`
-	Source          string `json:"source"`
-	AuthProvider    string `json:"auth_provider,omitempty"`
-	AuthAccount     string `json:"auth_account,omitempty"`
-	AuthType        string `json:"auth_type"`
-	ServiceTier     string `json:"service_tier"`
-	ReasoningEffort string `json:"reasoning_effort"`
-	Failed          bool   `json:"failed"`
-	FailureStatus   int    `json:"failure_status"`
+	Provider         string `json:"provider"`
+	ExecutorType     string `json:"executor_type"`
+	Model            string `json:"model"`
+	Alias            string `json:"alias"`
+	Source           string `json:"source"`
+	APIKey           string `json:"api_key,omitempty"`
+	APIKeyHash       string `json:"api_key_hash,omitempty"`
+	APIKeyGeneration uint64 `json:"api_key_generation,omitempty"`
+	APIKeyRef        string `json:"api_key_ref,omitempty"`
+	APIKeyStatus     string `json:"api_key_status,omitempty"`
+	AuthType         string `json:"auth_type"`
+	ServiceTier      string `json:"service_tier"`
+	ReasoningEffort  string `json:"reasoning_effort"`
+	Failed           bool   `json:"failed"`
+	FailureStatus    int    `json:"failure_status"`
 }
 
 // usageFilter scopes every analytics surface to the same persisted dimensions.
 // Empty fields intentionally mean no restriction, which preserves legacy callers.
 type usageFilter struct {
-	Source       string
-	AuthProvider string
-	AuthAccount  string
+	Source           string
+	APIKeyHash       string
+	APIKeyGeneration uint64
+	Model            string
 }
 
-func newUsageFilter(source, authProvider, authAccount string) usageFilter {
-	return usageFilter{
-		Source:       normalizeDimension(source),
-		AuthProvider: normalizeDimension(authProvider),
-		AuthAccount:  normalizeDimension(authAccount),
+func newUsageFilter(source, apiKeyIdentity string) usageFilter {
+	filter := usageFilter{Source: normalizeDimension(source)}
+	if generation, hash, ok := parseAPIKeyRef(apiKeyIdentity); ok {
+		filter.APIKeyGeneration = generation
+		filter.APIKeyHash = hash
+	} else {
+		filter.APIKeyHash = normalizeDimension(apiKeyIdentity)
 	}
+	return filter
 }
 
 func (f usageFilter) matches(dimensions Dimensions) bool {
 	return (f.Source == "" || dimensions.Source == f.Source) &&
-		(f.AuthProvider == "" || dimensions.AuthProvider == f.AuthProvider) &&
-		(f.AuthAccount == "" || dimensions.AuthAccount == f.AuthAccount)
+		(f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash) &&
+		(f.APIKeyGeneration == 0 || dimensions.APIKeyGeneration == f.APIKeyGeneration) &&
+		(f.Model == "" || compactModelName(dimensions.Model) == f.Model)
+}
+
+func (d *Dimensions) Redact() {
+	d.APIKey = ""
+	d.APIKeyHash = ""
+	d.APIKeyGeneration = 0
+	d.APIKeyRef = ""
+	d.APIKeyStatus = ""
+}
+
+func (d *Dimensions) Reveal(decrypt DecryptFunc) {
+	if d.APIKeyHash == "" || d.APIKeyGeneration == 0 {
+		return
+	}
+	d.APIKeyRef = apiKeyRef(d.APIKeyGeneration, d.APIKeyHash)
+	plaintext, status := decrypt(d.APIKey, d.APIKeyHash, d.APIKeyGeneration)
+	d.APIKey = plaintext
+	d.APIKeyStatus = status
 }
 
 type Counters struct {
@@ -123,6 +149,15 @@ type GroupStats struct {
 	AverageTTFTNS    uint64 `json:"average_ttft_ns"`
 }
 
+// ModelStats is the compact per-model aggregate used by the first dashboard
+// response. It intentionally omits the unused dimension fields in GroupStats.
+type ModelStats struct {
+	Model string `json:"model"`
+	Counters
+	AverageLatencyNS uint64 `json:"average_latency_ns"`
+	AverageTTFTNS    uint64 `json:"average_ttft_ns"`
+}
+
 type SeriesPoint struct {
 	Hour string `json:"hour"`
 	Counters
@@ -138,23 +173,97 @@ type ModelSeriesPoint struct {
 }
 
 type StatsResponse struct {
-	SchemaVersion  uint32               `json:"schema_version"`
-	GeneratedAt    time.Time            `json:"generated_at"`
-	Range          string               `json:"range"`
-	RetainedSince  time.Time            `json:"retained_since"`
-	LastUsed       time.Time            `json:"last_used"`
-	Summary        Counters             `json:"summary"`
-	Groups         []GroupStats         `json:"groups"`
-	Series         []SeriesPoint        `json:"series"`
-	ModelSeries    []ModelSeriesPoint   `json:"model_series"`
-	Sources        []string             `json:"sources"`
-	AuthIdentities []AuthIdentityOption `json:"auth_identities"`
+	SchemaVersion uint32             `json:"schema_version"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Range         string             `json:"range"`
+	RetainedSince time.Time          `json:"retained_since"`
+	LastUsed      time.Time          `json:"last_used"`
+	Summary       Counters           `json:"summary"`
+	Groups        []GroupStats       `json:"groups"`
+	Series        []SeriesPoint      `json:"series"`
+	ModelSeries   []ModelSeriesPoint `json:"model_series"`
+	Sources       []string           `json:"sources"`
+	APIKeys       []APIKeyOption     `json:"api_keys,omitempty"`
 }
 
-type AuthIdentityOption struct {
-	Provider string `json:"provider"`
-	Account  string `json:"account"`
-	Label    string `json:"label"`
+// InitialStatsResponse excludes dimension rows and per-model time points so the
+// dashboard can render its first screen without parsing the largest payloads.
+type InitialStatsResponse struct {
+	SchemaVersion uint32         `json:"schema_version"`
+	GeneratedAt   time.Time      `json:"generated_at"`
+	Range         string         `json:"range"`
+	RetainedSince time.Time      `json:"retained_since"`
+	LastUsed      time.Time      `json:"last_used"`
+	BucketSeconds uint64         `json:"bucket_seconds"`
+	Summary       Counters       `json:"summary"`
+	Models        []ModelStats   `json:"models"`
+	Series        []SeriesPoint  `json:"series"`
+	Sources       []string       `json:"sources"`
+	APIKeys       []APIKeyOption `json:"api_keys,omitempty"`
+}
+
+type StatsTrendResponse struct {
+	SchemaVersion uint32             `json:"schema_version"`
+	GeneratedAt   time.Time          `json:"generated_at"`
+	Range         string             `json:"range"`
+	BucketSeconds uint64             `json:"bucket_seconds"`
+	ModelSeries   []ModelSeriesPoint `json:"model_series"`
+}
+
+type GroupStatsPage struct {
+	SchemaVersion uint32       `json:"schema_version"`
+	GeneratedAt   time.Time    `json:"generated_at"`
+	Range         string       `json:"range"`
+	Items         []GroupStats `json:"items"`
+	Total         int          `json:"total"`
+}
+
+type APIKeyOption struct {
+	Ref        string `json:"ref"`
+	Hash       string `json:"hash"`
+	Generation uint64 `json:"generation"`
+	Key        string `json:"key,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+func (s *StatsResponse) Redact() {
+	for i := range s.Groups {
+		s.Groups[i].Dimensions.Redact()
+	}
+	s.APIKeys = nil
+}
+
+func (s *StatsResponse) Reveal(decrypt DecryptFunc) {
+	for i := range s.Groups {
+		s.Groups[i].Dimensions.Reveal(decrypt)
+	}
+	for i := range s.APIKeys {
+		plaintext, status := decrypt(s.APIKeys[i].Key, s.APIKeys[i].Hash, s.APIKeys[i].Generation)
+		s.APIKeys[i].Key = plaintext
+		s.APIKeys[i].Status = status
+	}
+}
+
+func (s *InitialStatsResponse) Redact() { s.APIKeys = nil }
+
+func (s *InitialStatsResponse) Reveal(decrypt DecryptFunc) {
+	for i := range s.APIKeys {
+		plaintext, status := decrypt(s.APIKeys[i].Key, s.APIKeys[i].Hash, s.APIKeys[i].Generation)
+		s.APIKeys[i].Key = plaintext
+		s.APIKeys[i].Status = status
+	}
+}
+
+func (p *GroupStatsPage) Redact() {
+	for i := range p.Items {
+		p.Items[i].Dimensions.Redact()
+	}
+}
+
+func (p *GroupStatsPage) Reveal(decrypt DecryptFunc) {
+	for i := range p.Items {
+		p.Items[i].Dimensions.Reveal(decrypt)
+	}
 }
 
 type usageRange struct {
@@ -172,10 +281,10 @@ func buildStats(data map[aggregateKey]Counters, since, lastUsed time.Time, reque
 }
 
 func buildStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, source string, now time.Time) StatsResponse {
-	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, "", ""), now)
+	return buildStatsForRangeWithFilter(data, since, lastUsed, queryRange, newUsageFilter(source, ""), now, nil)
 }
 
-func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time) StatsResponse {
+func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time, apiKeyCiphertexts map[string]string) StatsResponse {
 	groups := make(map[Dimensions]Counters)
 	series := make(map[int64]Counters)
 	modelSeries := make(map[struct {
@@ -184,7 +293,7 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 	}]Counters)
 	summary := Counters{}
 	sources := make(map[string]struct{})
-	identities := make(map[usageIdentity]struct{})
+	apiKeyRefs := make(map[string]struct{})
 	for key, counters := range data {
 		bucketTime := time.Unix(key.Hour, 0).UTC()
 		if !queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start) {
@@ -197,8 +306,8 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		if dimensions.Source != "" {
 			sources[dimensions.Source] = struct{}{}
 		}
-		if dimensions.AuthProvider != "" && dimensions.AuthAccount != "" {
-			identities[usageIdentity{Provider: dimensions.AuthProvider, Account: dimensions.AuthAccount}] = struct{}{}
+		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+			apiKeyRefs[ref] = struct{}{}
 		}
 		if !filter.matches(dimensions) {
 			continue
@@ -228,6 +337,9 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 
 	groupRows := make([]GroupStats, 0, len(groups))
 	for dimensions, counters := range groups {
+		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+			dimensions.APIKey = apiKeyCiphertexts[ref]
+		}
 		groupRows = append(groupRows, GroupStats{
 			Dimensions:       dimensions,
 			Counters:         counters,
@@ -281,33 +393,286 @@ func buildStatsForRangeWithFilter(data map[aggregateKey]Counters, since, lastUse
 		sourceValues = append(sourceValues, value)
 	}
 	sort.Strings(sourceValues)
-	identityValues := make([]AuthIdentityOption, 0, len(identities))
-	for identity := range identities {
-		identityValues = append(identityValues, AuthIdentityOption{Provider: identity.Provider, Account: identity.Account, Label: identity.Provider + "-" + identity.Account})
+	apiKeys := make([]APIKeyOption, 0, len(apiKeyRefs))
+	for ref := range apiKeyRefs {
+		generation, hash, _ := parseAPIKeyRef(ref)
+		apiKeys = append(apiKeys, APIKeyOption{Ref: ref, Hash: hash, Generation: generation, Key: apiKeyCiphertexts[ref]})
 	}
-	sort.Slice(identityValues, func(i, j int) bool {
-		if identityValues[i].Label != identityValues[j].Label {
-			return identityValues[i].Label < identityValues[j].Label
-		}
-		if identityValues[i].Provider != identityValues[j].Provider {
-			return identityValues[i].Provider < identityValues[j].Provider
-		}
-		return identityValues[i].Account < identityValues[j].Account
-	})
+	sort.Slice(apiKeys, func(i, j int) bool { return apiKeys[i].Ref < apiKeys[j].Ref })
 
 	return StatsResponse{
-		SchemaVersion:  1,
-		GeneratedAt:    now.UTC(),
-		Range:          queryRange.Name,
-		RetainedSince:  since.UTC(),
-		LastUsed:       lastUsed.UTC(),
-		Summary:        summary,
-		Groups:         groupRows,
-		Series:         points,
-		ModelSeries:    modelPoints,
-		Sources:        sourceValues,
-		AuthIdentities: identityValues,
+		SchemaVersion: 1,
+		GeneratedAt:   now.UTC(),
+		Range:         queryRange.Name,
+		RetainedSince: since.UTC(),
+		LastUsed:      lastUsed.UTC(),
+		Summary:       summary,
+		Groups:        groupRows,
+		Series:        points,
+		ModelSeries:   modelPoints,
+		Sources:       sourceValues,
+		APIKeys:       apiKeys,
 	}
+}
+
+func compactBucketSeconds(queryRange usageRange, since, now time.Time) uint64 {
+	switch queryRange.Name {
+	case "24h":
+		return uint64((5 * time.Minute) / time.Second)
+	case "7d":
+		return uint64(time.Hour / time.Second)
+	case "30d":
+		return uint64((6 * time.Hour) / time.Second)
+	}
+	start := queryRange.Start
+	if start.IsZero() {
+		start = since
+	}
+	if start.IsZero() || !start.Before(now) {
+		return uint64(time.Hour / time.Second)
+	}
+	for _, width := range []uint64{300, 900, 3600, 21600, 86400, 604800} {
+		if uint64(now.Sub(start)/time.Second)/width <= 360 {
+			return width
+		}
+	}
+	return 604800
+}
+
+func compactBucket(unix int64, bucketSeconds uint64) int64 {
+	return unix / int64(bucketSeconds) * int64(bucketSeconds)
+}
+
+func compactModelName(model string) string {
+	if model == "" {
+		return "未标记模型"
+	}
+	return model
+}
+
+func sortedCompactSeries(series map[int64]Counters) []SeriesPoint {
+	keys := make([]int64, 0, len(series))
+	for key := range series {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	points := make([]SeriesPoint, 0, len(keys))
+	for _, key := range keys {
+		points = append(points, SeriesPoint{Hour: time.Unix(key, 0).UTC().Format(time.RFC3339), Counters: series[key]})
+	}
+	return points
+}
+
+func sortedCompactModels(models map[string]Counters) []ModelStats {
+	rows := make([]ModelStats, 0, len(models))
+	for model, counters := range models {
+		rows = append(rows, ModelStats{Model: model, Counters: counters, AverageLatencyNS: counters.averageLatencyNS(), AverageTTFTNS: counters.averageTTFTNS()})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].TotalTokens != rows[j].TotalTokens {
+			return rows[i].TotalTokens > rows[j].TotalTokens
+		}
+		return rows[i].Model < rows[j].Model
+	})
+	return rows
+}
+
+func initialStatsFromFull(stats StatsResponse, queryRange usageRange) InitialStatsResponse {
+	bucketSeconds := compactBucketSeconds(queryRange, stats.RetainedSince, stats.GeneratedAt)
+	series := make(map[int64]Counters)
+	models := make(map[string]Counters)
+	for _, point := range stats.Series {
+		timestamp, err := time.Parse(time.RFC3339, point.Hour)
+		if err != nil {
+			continue
+		}
+		bucket := compactBucket(timestamp.Unix(), bucketSeconds)
+		value := series[bucket]
+		value.add(point.Counters)
+		series[bucket] = value
+	}
+	for _, group := range stats.Groups {
+		model := compactModelName(group.Model)
+		value := models[model]
+		value.add(group.Counters)
+		models[model] = value
+	}
+	return InitialStatsResponse{
+		SchemaVersion: 2,
+		GeneratedAt:   stats.GeneratedAt,
+		Range:         stats.Range,
+		RetainedSince: stats.RetainedSince,
+		LastUsed:      stats.LastUsed,
+		BucketSeconds: bucketSeconds,
+		Summary:       stats.Summary,
+		Models:        sortedCompactModels(models),
+		Series:        sortedCompactSeries(series),
+		Sources:       stats.Sources,
+		APIKeys:       stats.APIKeys,
+	}
+}
+
+func trendStatsFromFull(stats StatsResponse, queryRange usageRange) StatsTrendResponse {
+	bucketSeconds := compactBucketSeconds(queryRange, stats.RetainedSince, stats.GeneratedAt)
+	series := make(map[struct {
+		bucket int64
+		model  string
+	}]Counters)
+	for _, point := range stats.ModelSeries {
+		timestamp, err := time.Parse(time.RFC3339, point.Hour)
+		if err != nil {
+			continue
+		}
+		key := struct {
+			bucket int64
+			model  string
+		}{bucket: compactBucket(timestamp.Unix(), bucketSeconds), model: compactModelName(point.Model)}
+		value := series[key]
+		value.add(point.Counters)
+		series[key] = value
+	}
+	keys := make([]struct {
+		bucket int64
+		model  string
+	}, 0, len(series))
+	for key := range series {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].bucket != keys[j].bucket {
+			return keys[i].bucket < keys[j].bucket
+		}
+		return keys[i].model < keys[j].model
+	})
+	points := make([]ModelSeriesPoint, 0, len(keys))
+	for _, key := range keys {
+		points = append(points, ModelSeriesPoint{Hour: time.Unix(key.bucket, 0).UTC().Format(time.RFC3339), Model: key.model, Counters: series[key]})
+	}
+	return StatsTrendResponse{SchemaVersion: 2, GeneratedAt: stats.GeneratedAt, Range: stats.Range, BucketSeconds: bucketSeconds, ModelSeries: points}
+}
+
+func sortedStatsAPIKeys(refs map[string]struct{}, ciphertexts map[string]string) []APIKeyOption {
+	values := make([]APIKeyOption, 0, len(refs))
+	for ref := range refs {
+		generation, hash, _ := parseAPIKeyRef(ref)
+		values = append(values, APIKeyOption{Ref: ref, Hash: hash, Generation: generation, Key: ciphertexts[ref]})
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].Ref < values[j].Ref })
+	return values
+}
+
+func buildInitialStatsForRange(data map[aggregateKey]Counters, since, lastUsed time.Time, queryRange usageRange, filter usageFilter, now time.Time, apiKeyCiphertexts map[string]string) InitialStatsResponse {
+	bucketSeconds := compactBucketSeconds(queryRange, since, now)
+	series := make(map[int64]Counters)
+	models := make(map[string]Counters)
+	sources := make(map[string]struct{})
+	apiKeyRefs := make(map[string]struct{})
+	summary := Counters{}
+	for key, counters := range data {
+		bucketTime := time.Unix(key.Hour, 0).UTC()
+		if (!queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start)) || (!queryRange.End.IsZero() && !bucketTime.Before(queryRange.End)) {
+			continue
+		}
+		dimensions := sanitizeDimensionsSource(key.Dimensions)
+		if dimensions.Source != "" {
+			sources[dimensions.Source] = struct{}{}
+		}
+		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+			apiKeyRefs[ref] = struct{}{}
+		}
+		if !filter.matches(dimensions) {
+			continue
+		}
+		seriesKey := compactBucket(key.Hour, bucketSeconds)
+		point := series[seriesKey]
+		point.add(counters)
+		series[seriesKey] = point
+		model := compactModelName(dimensions.Model)
+		modelCounters := models[model]
+		modelCounters.add(counters)
+		models[model] = modelCounters
+		summary.add(counters)
+	}
+	sourceValues := make([]string, 0, len(sources))
+	for source := range sources {
+		sourceValues = append(sourceValues, source)
+	}
+	sort.Strings(sourceValues)
+	return InitialStatsResponse{SchemaVersion: 2, GeneratedAt: now.UTC(), Range: queryRange.Name, RetainedSince: since.UTC(), LastUsed: lastUsed.UTC(), BucketSeconds: bucketSeconds, Summary: summary, Models: sortedCompactModels(models), Series: sortedCompactSeries(series), Sources: sourceValues, APIKeys: sortedStatsAPIKeys(apiKeyRefs, apiKeyCiphertexts)}
+}
+
+func buildStatsTrendForRange(data map[aggregateKey]Counters, since time.Time, queryRange usageRange, filter usageFilter, now time.Time) StatsTrendResponse {
+	bucketSeconds := compactBucketSeconds(queryRange, since, now)
+	series := make(map[struct {
+		bucket int64
+		model  string
+	}]Counters)
+	for key, counters := range data {
+		bucketTime := time.Unix(key.Hour, 0).UTC()
+		if (!queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start)) || (!queryRange.End.IsZero() && !bucketTime.Before(queryRange.End)) {
+			continue
+		}
+		dimensions := sanitizeDimensionsSource(key.Dimensions)
+		if !filter.matches(dimensions) {
+			continue
+		}
+		modelKey := struct {
+			bucket int64
+			model  string
+		}{bucket: compactBucket(key.Hour, bucketSeconds), model: compactModelName(dimensions.Model)}
+		point := series[modelKey]
+		point.add(counters)
+		series[modelKey] = point
+	}
+	keys := make([]struct {
+		bucket int64
+		model  string
+	}, 0, len(series))
+	for key := range series {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		if keys[i].bucket != keys[j].bucket {
+			return keys[i].bucket < keys[j].bucket
+		}
+		return keys[i].model < keys[j].model
+	})
+	points := make([]ModelSeriesPoint, 0, len(keys))
+	for _, key := range keys {
+		points = append(points, ModelSeriesPoint{Hour: time.Unix(key.bucket, 0).UTC().Format(time.RFC3339), Model: key.model, Counters: series[key]})
+	}
+	return StatsTrendResponse{SchemaVersion: 2, GeneratedAt: now.UTC(), Range: queryRange.Name, BucketSeconds: bucketSeconds, ModelSeries: points}
+}
+
+func buildGroupsForRange(data map[aggregateKey]Counters, queryRange usageRange, filter usageFilter, now time.Time, apiKeyCiphertexts map[string]string) GroupStatsPage {
+	groups := make(map[Dimensions]Counters)
+	for key, counters := range data {
+		bucketTime := time.Unix(key.Hour, 0).UTC()
+		if (!queryRange.Start.IsZero() && bucketTime.Before(queryRange.Start)) || (!queryRange.End.IsZero() && !bucketTime.Before(queryRange.End)) {
+			continue
+		}
+		dimensions := sanitizeDimensionsSource(key.Dimensions)
+		if !filter.matches(dimensions) {
+			continue
+		}
+		group := groups[dimensions]
+		group.add(counters)
+		groups[dimensions] = group
+	}
+	items := make([]GroupStats, 0, len(groups))
+	for dimensions, counters := range groups {
+		if ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash); ref != "" {
+			dimensions.APIKey = apiKeyCiphertexts[ref]
+		}
+		items = append(items, GroupStats{Dimensions: dimensions, Counters: counters, AverageLatencyNS: counters.averageLatencyNS(), AverageTTFTNS: counters.averageTTFTNS()})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TotalTokens != items[j].TotalTokens {
+			return items[i].TotalTokens > items[j].TotalTokens
+		}
+		return compareDimensions(items[i].Dimensions, items[j].Dimensions) < 0
+	})
+	return GroupStatsPage{SchemaVersion: 2, GeneratedAt: now.UTC(), Range: queryRange.Name, Items: items, Total: len(items)}
 }
 
 func queryCutoff(value string, now time.Time) (string, time.Time, error) {
@@ -374,8 +739,8 @@ func compareDimensions(left, right Dimensions) int {
 		cmp.Compare(left.Model, right.Model),
 		cmp.Compare(left.Alias, right.Alias),
 		cmp.Compare(left.Source, right.Source),
-		cmp.Compare(left.AuthProvider, right.AuthProvider),
-		cmp.Compare(left.AuthAccount, right.AuthAccount),
+		cmp.Compare(left.APIKeyGeneration, right.APIKeyGeneration),
+		cmp.Compare(left.APIKeyHash, right.APIKeyHash),
 		cmp.Compare(left.AuthType, right.AuthType),
 		cmp.Compare(left.ServiceTier, right.ServiceTier),
 		cmp.Compare(left.ReasoningEffort, right.ReasoningEffort),

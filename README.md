@@ -9,50 +9,105 @@
 
 ## 中文
 
-CLIProxyAPI 的持久化 Token 用量统计插件。插件通过官方 `usage_plugin` 接收用量记录，通过 `management_api` 注册只读资源接口和受保护的模型价格保存、重置接口，并在 Management Center 菜单中提供内嵌 iframe 仪表盘。
+CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。它通过官方 `usage_plugin` 接收用量记录，将分钟级聚合、逐请求元数据、模型价格和仪表盘偏好保存到本地 bbolt 数据库，并通过 `management_api` 注册仪表盘与管理接口。
 
-## 功能
+插件不保存 prompt、请求正文或模型响应正文。启用 API Key 跟踪时，API Key 只以加密密文保存，并且仅在经过鉴权的完整模式中尝试解密显示。
 
-- 按 UTC 分钟持久化聚合，并保存逐请求用量元数据；不保存请求或响应正文
+### 主要功能
+
+- 按 UTC 分钟持久化聚合，同时保存逐请求用量元数据
 - 按模型、提供商、执行器、别名、来源、认证类型、服务层级、推理强度和失败状态分组
-- 统计请求数、失败数、输入/输出/推理/缓存 Token、延迟、TTFT、生成时间、TPS 和缓存命中
-- 支持按浏览器所在地时区，通过双月日历选择任意日期范围；反向选择会自动交换起止日期，趋势图可按分钟/小时/日/周/月聚合
-- 自包含仪表盘，无第三方前端依赖，包含指标卡片、堆叠 Token 趋势、模型环形占比、精确费用趋势、模型效率散点图和逐请求明细
-- 仪表盘界面自动跟随浏览器语言无感切换，支持英文（en）、简体中文（zh-CN）、繁体中文（zh-TW）和俄文（ru），无需手动选择；每种语言对应一个独立语言文件，可按需扩展
-- 支持 Input、Output、Cache Read、Cache Creation 四类模型价格、逐请求 Context Tier、免费模型、价格覆盖率和缺价提示
-- 支持从 models.dev 手动同步 CLIProxyAPI `/v1/models` 当前返回的模型价格，可配置提供商优先级、忽略后缀和显式模型映射；手工价格优先
-- 支持模型下钻联动、趋势图滚轮缩放/平移、移动端自适应坐标轴、总 Token 完整/k/m 切换、全页面 USD/CNY 最新汇率显示、当前筛选数据 CSV 和 Dashboard PNG 导出
-- 主题由 CLIProxyAPI Management Center 统一控制，自动同步跟随系统、纯白、羊毛纸和暗色模式
-- 数据重置需 CLIProxyAPI 管理鉴权和显式 `reset` 确认
-- 支持 Linux amd64/arm64、Windows amd64 和 macOS arm64 的 `c-shared` 构建
+- 统计请求数、失败数、输入/输出/推理/缓存 Token、延迟、TTFT、生成时间、TPS 和缓存命中率
+- 支持今天、最近 5 小时、最近 7 天、最近 30 天、本月及自定义日期时间范围
+- 趋势图支持分钟、小时、日、周、月聚合，以及滚轮缩放和平移
+- 提供 Token 趋势、模型占比、费用趋势、模型效率和逐请求明细
+- 支持来源、认证账号、模型和请求结果筛选
+- 支持请求表和维度表分页、排序、列显示偏好持久化
+- 支持按 API Key 筛选、设置显示标签，并隔离不同加密密钥代际
+- 支持 USD/CNY 汇率展示和总 Token 完整值、k、m 单位切换
+- 自动跟随 CLIProxyAPI Management Center 主题和浏览器语言
+- 内置英文、简体中文、繁体中文和俄文
+- 提供独立的普通模式和完整模式前端
+- 支持 Linux amd64/arm64、Windows amd64 和 macOS arm64 `c-shared` 构建
 
-## 隐私
+### 普通模式与完整模式
 
-插件不会保存或通过统计接口返回：
-
-- API Key
-- Auth ID / Auth Index
-- 失败响应正文
-- 响应头
-- 请求或响应正文
-
-数据库包含分钟级聚合维度与计数、逐请求用量元数据（例如时间、模型、来源、Tier、结果、延迟、推理强度、Token 计数和缓存命中），以及用户设置或从 models.dev 同步的模型价格、Context Tier、匹配设置和同步来源元数据；不会保存 prompt、响应内容或其他请求/响应正文。维度字段和逐请求元数据仍可能反映模型、来源或服务层级等运行信息。为使仪表盘打开时无需再次输入密钥，插件的只读资源接口不经过 CLIProxyAPI management 鉴权；请只在受信网络中暴露 CLIProxyAPI。受保护的 management 统计、模型价格保存、models.dev 同步和重置接口仍需管理鉴权。
-
-## 配置
-
-将对应平台的共享库放在 CLIProxyAPI 的平台插件目录。文件名必须保持为 `cap-token-usage-tracker`，因为 CLIProxyAPI 会根据共享库文件名派生 plugin ID：
+普通模式是 Management Center 菜单默认打开的页面：
 
 ```text
-plugins/linux/arm64/cap-token-usage-tracker.so
+/v0/resource/plugins/cap-token-usage-tracker/dashboard
 ```
 
-其他平台的目录和文件名为：
+普通模式可以查看当前项目已有的非敏感统计数据，包括概览、趋势、费用估算、维度统计和逐请求元数据。它保留筛选、时间范围、刷新、表格分页、排序和列设置等日常查看功能。
+
+仪表盘会优先请求紧凑的首屏统计并立即渲染摘要、模型汇总和聚合趋势；逐模型趋势、维度表、逐请求明细、价格和费用随后异步加载。首屏的 `24h` 趋势按 5 分钟桶聚合，`7d` 按小时桶聚合；更长或自定义范围会自动选择足以控制点数的更粗粒度。
+
+普通模式不显示以下入口和页面：
+
+- 模型价格配置和 models.dev 价格同步
+- CSV 和 Dashboard PNG 导出
+- 数据库备份与恢复
+
+点击普通模式顶部的“完整模式”按钮后，页面才显示管理密钥输入框。管理密钥通过 CLIProxyAPI Management API 鉴权成功后，插件签发一个随机、短期、仅保存在内存中的完整模式会话令牌，并导航到独立页面：
 
 ```text
-plugins/linux/amd64/cap-token-usage-tracker.so
-plugins/windows/amd64/cap-token-usage-tracker.dll
-plugins/darwin/arm64/cap-token-usage-tracker.dylib
+/v0/resource/plugins/cap-token-usage-tracker/full-dashboard
 ```
+
+完整模式与普通模式保持相同的主体布局和统计功能，并额外显示：
+
+- 模型价格配置与保存
+- CLIProxyAPI `/v1/models` 模型加载
+- models.dev 价格同步
+- 当前筛选数据 CSV 导出
+- Dashboard PNG 导出
+- bbolt 数据库备份与恢复
+- API Key 明文查看、筛选、标签管理和密钥安全状态提示
+
+完整模式会话有效期为 15 分钟。会话令牌通过 `X-Full-Mode-Session` 请求头发送，不写入数据库；退出完整模式时会主动撤销。页面导航时使用 URL fragment 临时传递令牌，加载后立即从地址栏清除。管理密钥不作为后续操作的鉴权凭据保存在前端，价格、导出、备份和恢复直接使用当前内存中的会话令牌。
+
+完整模式 HTML 本身不嵌入受保护数据。API Key 明文、标签和密钥安全状态由带 `X-Full-Mode-Session` 鉴权的资源接口按需返回，不能写进普通模式 HTML、普通资源响应或前端静态脚本。仅通过 CSS 隐藏元素不能保护敏感数据。
+
+普通模式和完整模式共享统计数据源，但普通模式会删除 API Key 明文、引用、指纹、加密代际和解密状态。完整模式会根据当前配置的 `api_key_secret` 逐项解密；无法解密的历史密文显示“明文不可用”，不会影响其他统计数据。
+
+`/stats/initial` 与 `/stats/groups` 和旧版 `/stats` 一样执行脱敏：普通模式响应不含 API Key 集合或任何维度中的 API Key 字段；`/stats/trends` 只包含时间、模型和计数器。`api_key_ref` 与兼容的 `api_key_hash` 筛选在所有统计、趋势、维度、请求和费用接口中都必须携带有效的 `X-Full-Mode-Session`，未授权请求会返回 `403`，不能通过查询参数绕过完整模式鉴权。
+
+### 隐私与安全边界
+
+插件不会持久化：
+
+- API Key 明文
+- Auth ID 或 Auth Index 原始值
+- prompt、请求正文或模型响应正文
+- 失败响应正文和响应头
+
+数据库会保存：
+
+- 分钟级聚合维度和计数
+- 逐请求时间、模型、来源、服务层级、结果、延迟、推理强度和 Token 计数
+- API Key 加密密文、带密钥指纹、加密代际和用户设置的显示标签
+- 经过清理的认证账号显示信息
+- 模型价格、Context Tier、服务层级价格和同步元数据
+- 仪表盘时间范围、分页大小和隐藏列偏好
+
+来源字段会进行凭据清理。疑似 API Key、Bearer Token 或其他凭据形式的来源不会按原值保存；插件会尽量回退到规范化的提供商服务地址。
+
+API Key 跟踪默认使用公开密钥 `123456`。该默认值只能提供误显示防护，任何获得数据库或备份的人都可以使用它解密其中保存的 API Key；完整模式会持续显示安全警告。生产环境应配置至少 32 字节的自定义 `api_key_secret`。成功应用自定义密钥后，警告会在重新打开完整模式、手动刷新或下一次 15 秒自动刷新时消失。
+
+更换 `api_key_secret` 不会删除数据库或历史统计，而是创建或激活对应的加密代际。当前密钥无法解密的旧代 API Key 显示“明文不可用”；切回对应旧密钥后可以再次读取。将 `api_key_secret` 设为空字符串会禁用 API Key 跟踪，之后收到的记录不会保存 API Key 密文或指纹。
+
+普通模式统计资源无需再次输入管理密钥，因此任何能访问 CLIProxyAPI Management Center 的浏览器都可以读取这些非敏感统计数据。不要将 Management Center 直接暴露到不受信任网络。完整模式入口由管理密钥保护，但它不能替代 TLS、网络访问控制和宿主 Management API 安全配置。
+
+### 安装与配置
+
+将目标平台的共享库放入 CLIProxyAPI 对应目录。文件名必须保持为 `cap-token-usage-tracker`，CLIProxyAPI 会根据共享库文件名派生 plugin ID。
+
+| 平台 | 安装路径 |
+|---|---|
+| Linux amd64 | `plugins/linux/amd64/cap-token-usage-tracker.so` |
+| Linux arm64 | `plugins/linux/arm64/cap-token-usage-tracker.so` |
+| Windows amd64 | `plugins/windows/amd64/cap-token-usage-tracker.dll` |
+| macOS arm64 | `plugins/darwin/arm64/cap-token-usage-tracker.dylib` |
 
 CLIProxyAPI 配置示例：
 
@@ -68,63 +123,126 @@ plugins:
       flush_interval: 5s
       flush_max_records: 100
       sync_on_record: true
+      api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
+      response_compression: true
+      response_compression_min_bytes: 1024
 ```
 
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
-| `data_path` | `CLIProxyAPI/data/token-usage-tracker.db` | bbolt 数据库路径；插件根据固定的 `plugins` 目录自动定位同级 `data`，显式相对路径仍基于 CLIProxyAPI 进程工作目录 |
-| `retention_days` | `30` | 保留的 UTC 天数，范围 1–3650 |
-| `flush_interval` | `5s` | 批量刷盘最长间隔，范围 1 秒–1 小时 |
-| `flush_max_records` | `100` | 接收指定数量记录后立即刷盘 |
-| `sync_on_record` | `true` | 默认每条记录提交数据库后才确认；设为 `false` 可启用批量模式以提高吞吐 |
+| `data_path` | `CLIProxyAPI/data/token-usage-tracker.db` | bbolt 数据库路径；显式相对路径以 CLIProxyAPI 进程工作目录为基准 |
+| `retention_days` | `30` | 统计和逐请求明细保留天数，范围 1-3650 |
+| `flush_interval` | `5s` | 批量模式最长刷盘间隔，范围 1 秒-1 小时 |
+| `flush_max_records` | `100` | 批量模式达到该记录数时立即刷盘，范围 1-1000000 |
+| `sync_on_record` | `true` | 每条记录提交数据库后再确认；设为 `false` 时启用批量模式 |
+| `api_key_secret` | `123456` | API Key 加密和带密钥指纹使用的密钥；自定义值至少 32 字节，空字符串禁用 API Key 跟踪 |
+| `response_compression` | `true` | 客户端支持 gzip 时压缩公共仪表盘 HTML 和 JSON 响应；管理接口保持未压缩 |
+| `response_compression_min_bytes` | `1024` | 启用 gzip 的最小响应字节数，范围 0-16777216 |
 
-默认同步模式会在 `usage.handle` 返回前提交每条统计，避免正常记录停留在未刷盘窗口。仅当显式设置 `sync_on_record: false` 时启用批量模式；进程被强制终止时，批量模式最多可能损失一个 `flush_interval` 或未达到 `flush_max_records` 的窗口。
+示例中的 `api_key_secret` 只是占位符，部署时必须替换。含 `#`、`:`、`{}` 等特殊字符的值应使用 YAML 引号包裹；长度按 UTF-8 字节计算。该密钥会保存在 CLIProxyAPI 配置中，因此应限制配置文件权限，避免提交到公开仓库，也不要与数据库备份一起分发。
 
-未配置 `data_path` 时，macOS/Linux 插件会先从当前共享库路径向上查找固定的 `plugins` 目录，随后还会检查 CLIProxyAPI 主程序目录和当前工作目录。找到后默认数据库稳定为 `CLIProxyAPI/data/token-usage-tracker.db`。非标准目录布局无法识别时会回退到旧版 `./data/token-usage-tracker.db` 规则。已有默认位置数据库会被直接复用，不迁移也不覆盖。
+默认 `sync_on_record: true` 优先保证记录持久化。设为 `false` 可以减少写入次数，但进程被强制终止时，最多可能丢失一个 `flush_interval` 或尚未达到 `flush_max_records` 的窗口。
 
-插件会在数据库旁创建 `<data_path>.handover` 协调同一 CLIProxyAPI 进程中的热更新。新版实例注册时，旧版实例会先刷盘并释放 bbolt 独占锁，再由新版实例接管数据库，从而避免 `open database: timeout`。从不支持此交接机制的旧版本首次升级时，需要先重启 CLIProxyAPI 或删除后重装一次；之后的版本更新可以直接热更新。
+默认 `response_compression: true` 通过标准 `Accept-Encoding` 协商启用 gzip，因此直接访问 CLIProxyAPI IP 和端口的现代浏览器也能获得压缩响应。不支持 gzip 或显式发送 `gzip;q=0` 的客户端仍会收到原始响应；二进制备份、已编码响应和 `/v0/management/` 接口不会由插件压缩。
 
-修改 `data_path` 会切换到一个独立数据库，不会自动迁移或删除旧文件。
+未配置 `data_path` 时，插件按以下顺序定位数据库：
 
-## 页面与接口
+1. 从已加载共享库路径向上查找 `plugins` 目录
+2. 检查 CLIProxyAPI 可执行文件同级的 `plugins` 目录
+3. 检查当前工作目录下的 `plugins` 目录
+4. 无法识别时回退到 `./data/token-usage-tracker.db`
 
-插件 ID 取自共享库文件名。以 `cap-token-usage-tracker.so` 为例：
+### 仪表盘操作
 
-- 仪表盘：`/v0/resource/plugins/cap-token-usage-tracker/dashboard`
-- 仪表盘只读统计（无需 management key）：`GET /v0/resource/plugins/cap-token-usage-tracker/stats?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z`
-- 逐请求明细与当前价格下的 `estimated_cost`（无需 management key）：`GET /v0/resource/plugins/cap-token-usage-tracker/requests?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z&offset=0&limit=100&model=gpt-4.1&source=cli&result=success`
-- 逐请求精确汇总费用（无需 management key）：`GET /v0/resource/plugins/cap-token-usage-tracker/costs?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z`
-- 最新 USD/CNY 显示汇率（无需 management key）：`GET /v0/resource/plugins/cap-token-usage-tracker/exchange-rate`
-- 模型价格、同步设置和最近同步结果读取（无需 management key）：`GET /v0/resource/plugins/cap-token-usage-tracker/prices`
-- 受保护统计：`GET /v0/management/plugins/cap-token-usage-tracker/stats?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z`
-- 模型价格完整替换保存（需要 management key）：`PUT /v0/management/plugins/cap-token-usage-tracker/prices`
-- 从 models.dev 同步价格（需要 management key）：`POST /v0/management/plugins/cap-token-usage-tracker/prices/sync`
-- 受保护重置：`POST /v0/management/plugins/cap-token-usage-tracker/reset`
+普通模式和完整模式都支持：
 
-仪表盘以浏览器所在地的自然日选择日期范围，并将本地起始日零点与结束日次日零点转换为 RFC3339 `start`、`end` 时间点；后端按左闭右开区间 `[start, end)` 过滤。两个参数必须同时提供且 `start < end`。旧的 `range=24h`、`7d`、`30d`、`retention` 继续用于接口兼容。`source` 可选，按请求明细中的来源字段精确筛选，并可用于 `/stats`、`/requests` 和 `/costs`；逐请求明细按时间倒序返回，`offset` 必须为非负整数，`limit` 默认为 100、最大为 500，`model` 可选并用于精确筛选模型，`result` 可选值为 `success` 或 `failed`。
+- 选择时间预设或自定义起止日期与时间
+- 按来源和认证账号筛选
+- 切换趋势聚合粒度并缩放或平移趋势图
+- 点击模型图表下钻，再次点击清除模型筛选
+- 切换 Token 显示单位和 USD/CNY
+- 调整逐请求表和维度表的可见列、排序和分页大小
+- 手动刷新；页面默认每 15 秒自动刷新
 
-Management Center 会把插件页面放入 iframe。仪表盘通过只读资源接口自动加载，打开和刷新页面都不需要 management key。通过反向代理部署在子路径时，仪表盘会从当前 iframe 地址自动保留公网路径前缀；例如 iframe 位于 `/cpa/v0/resource/plugins/cap-token-usage-tracker/dashboard` 时，资源、管理和模型目录请求会分别使用 `/cpa/v0/resource/plugins/...`、`/cpa/v0/management/plugins/...` 和 `/cpa/v1/models`。价格弹窗使用临时 CLIProxyAPI API Key 从同源 `/v1/models`（含反向代理前缀）加载当前模型目录；保存价格、同步 models.dev 或重置数据时仍要求 Management Key。两种密钥都只保存在当前 DOM/内存中，关闭对话框后清空，不会写入插件数据库、浏览器存储或 URL。模型价格、同步设置和同步来源元数据保存在插件 bbolt 数据库中，刷新页面和重启服务后仍会保留；重置统计不会删除价格簿。
+重置统计入口只在完整模式可用，需要当前完整模式会话和显式确认。
 
-## 价格、Context Tier 与费用估算
+表格偏好和时间范围保存在插件数据库中。自定义时间按浏览器本地时区选择，再转换为 UTC RFC3339 时间戳请求。
 
-每个模型可配置以下 USD / 1M Token 单价：
+### 模型价格与费用估算
 
-- `input`
-- `output`
-- `cache_read`
-- `cache_creation`
+模型价格入口只在完整模式显示。所有价格单位均为每 100 万 Token 的美元价格，支持 Input、Output、Cache Read、Cache Creation、Context Tier、Service Tier 独立价格及其 Context Tier，以及 `input_excludes_cache` 和 `input_includes_cache` 两种计费方式。所有价格为 0 的模型按免费模型处理。
 
-Context Tier 按**单次请求**选择，而不是按模型或时间段聚合总量选择。`context_tokens > threshold` 时启用对应档位；等于 threshold 时仍使用较低档，多个档位同时满足时选择 threshold 最大的一档。每个档位完整替换四类基础价格。
+价格可手工维护，也可从 models.dev 同步。同步先读取 CLIProxyAPI `/v1/models` 当前返回的模型，再根据提供商优先级、忽略后缀和显式模型映射匹配 models.dev。
 
-费用计算优先使用 `CacheReadTokens`；其为 0 时才使用兼容字段 `CachedTokens`，两者不会重复收费。Provider 为精确的 `anthropic` 或执行器为 `claude` 时，Input 按“不含缓存”处理；其他或未知 Provider 默认按“Input 已含缓存”处理并先扣除 Cache Read/Creation，避免重复收费。Reasoning Token 当前不单独计价。
+手工价格优先，不会被同步覆盖。价格簿使用 revision 防止并发覆盖。费用根据逐请求记录和匹配的价格规则计算；缺价请求会显示在价格覆盖率和缺价提示中，不会作为零成本混入已知费用。
 
-所有费用都是使用**当前价格簿**对保留的逐请求数据重新估算。修改或同步价格后，历史请求的预估费用会随之变化；这些值不是供应商账单，也不是请求发生时的价格快照。显式保存四类价格均为 0 的模型表示免费模型，仍计入“已定价”覆盖率。`PUT /prices` 是完整替换：省略某个已有模型即删除该价格；未修改的 models.dev 条目保留同步来源，编辑后转为手工覆盖。
+### 导出、备份与恢复
 
-models.dev 同步只导入同步操作前从 CLIProxyAPI `/v1/models` 重新获取的当前模型，不再使用 retention 中的历史用量模型，也不保存整个 models.dev 目录。默认提供商优先级为 `openai, google, anthropic`，并支持忽略模型后缀及 `source=target` 显式映射。手工价格不会被后续同步覆盖。同步使用固定的 `https://models.dev/api.json`、标准 Go HTTP 代理环境变量、约 15 秒超时和 16 MiB 响应上限；并发同步或同步期间价格簿被修改会返回 HTTP 409，远端超时返回 504，其他目录/网络错误返回 502。
+以下功能只在完整模式可用，并在执行时校验当前会话：
 
-USD/CNY 切换只改变页面与 PNG 的显示：价格簿、后端 `*_usd` 字段和 CSV 始终保持 USD。插件通过固定 HTTPS 汇率源获取最新 USD/CNY，进程内缓存 1 小时；刷新失败时最多使用 24 小时内的缓存汇率并在页面标记，完全无可用汇率时保持 USD。价格删除在弹窗中先显示为可撤销的“待保存删除”，保存完整价格簿后才会重新计算历史费用。
+- 导出当前筛选数据为 CSV
+- 将当前 Dashboard 导出为 PNG
+- 下载完整 bbolt 数据库备份
+- 从备份文件恢复数据库
+- 重置统计数据（需通过完整模式会话鉴权）
 
-当上游 `TotalTokens <= 0` 时，新接收记录按 `max(input,0) + max(output,0) + max(reasoning,0)` 饱和求和；若结果仍为 0，再使用正数 `CachedTokens`。`CacheReadTokens` 和 `CacheCreationTokens` 不参与该 fallback，已有历史记录不会被重写。
+备份文件最大为 64 MiB。恢复会替换当前数据库，需要用户确认，并在服务端校验 `X-Confirm-Restore: replace`。完整模式通过分段上传传输恢复数据，每次上传及其会话均有过期时间。
+
+直接调用 CLIProxyAPI Management API 时，仍可使用管理密钥访问备份、恢复、价格保存、价格同步和重置路由。
+
+### 页面与接口
+
+以下路径以 plugin ID `cap-token-usage-tracker` 为例。
+
+普通资源：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/dashboard` | 普通模式页面 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | 兼容客户端的完整聚合统计 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/initial` | 首屏摘要、紧凑模型汇总和聚合趋势 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/trends` | 下采样后的逐模型趋势，供首屏后异步加载 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/groups` | 服务端排序和分页的详细维度统计 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/requests` | 分页逐请求明细 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/costs` | 基于逐请求记录计算的费用统计 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/exchange-rate` | 缓存的 USD/CNY 汇率 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/prices` | 读取当前价格簿，用于费用展示 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/preferences` | 读取或保存仪表盘偏好 |
+
+完整模式资源：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-dashboard` | 独立完整模式页面壳 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/data` | 校验会话并返回受保护数据 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | 通过 `X-API-Key-Label` JSON 请求头保存或删除 API Key 显示标签 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/session/revoke` | 撤销当前会话 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices` | 读取受保护价格配置 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/save` | 分段保存价格配置 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/sync` | 分段提交 models.dev 同步请求 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/backup` | 下载数据库备份 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/restore` | 分段上传并恢复数据库 |
+| `POST` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/reset` | 校验会话后重置统计 |
+
+除页面壳外，完整模式资源均要求：
+
+```http
+X-Full-Mode-Session: <session-token>
+```
+
+受 CLIProxyAPI Management API 鉴权的路由：
+
+| 方法 | 路径 | 用途 |
+|---|---|---|
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/full-mode/session` | 签发完整模式会话 |
+| `GET` | `/v0/management/plugins/cap-token-usage-tracker/stats` | 读取聚合统计 |
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/reset` | 重置统计 |
+| `PUT` | `/v0/management/plugins/cap-token-usage-tracker/prices` | 保存模型价格 |
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/prices/sync` | 同步 models.dev 价格 |
+| `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | 下载数据库备份 |
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | 恢复数据库 |
+
+统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。`/stats/groups` 另支持 `offset`、`limit`、`sort`、`direction`、`model` 和重复的 `exclude_model`；每页最多 500 条。
 
 重置请求正文：
 
@@ -132,140 +250,58 @@ USD/CNY 切换只改变页面与 PNG 的显示：价格簿、后端 `*_usd` 字�
 {"confirm":"reset"}
 ```
 
-## 跨平台构建
+恢复请求需要：
 
-要求：
+```http
+Content-Type: application/octet-stream
+X-Confirm-Restore: replace
+```
 
-- Go 1.26+
-- 构建共享库时必须启用 CGO（`CGO_ENABLED=1`）
-- Windows 需要 MinGW-w64；Linux ARM64 交叉构建需要 `aarch64-linux-gnu-gcc`
+### 构建与开发
 
-所有平台都使用 `-buildmode=c-shared`。构建输出必须使用下表中的安装文件名，否则 CLIProxyAPI 无法从文件名识别 plugin ID。
-
-| 平台 | 目标架构 | 文件格式 | 安装文件名 | CLIProxyAPI 目录 |
-|---|---|---|---|---|
-| Linux | amd64 | `.so` | `cap-token-usage-tracker.so` | `plugins/linux/amd64/` |
-| Linux | arm64 | `.so` | `cap-token-usage-tracker.so` | `plugins/linux/arm64/` |
-| Windows | amd64 | `.dll` | `cap-token-usage-tracker.dll` | `plugins/windows/amd64/` |
-| macOS | arm64 | `.dylib` | `cap-token-usage-tracker.dylib` | `plugins/darwin/arm64/` |
-
-插件当前明确支持 CLIProxyAPI RPC schema 1-3。宿主声明更高 schema 时，插件会协商到已验证的 schema 3，因此仅增加 `schema_version` 不会阻止加载；如果未来 CLIProxyAPI 修改原生 C ABI 或移除旧 schema 的协商支持，则仍需发布对应的兼容版本。
-
-### Linux amd64
-
-在 Linux amd64 原生构建：
+要求 Go 1.26+、`CGO_ENABLED=1`。Windows amd64 需要 MinGW-w64；Linux arm64 交叉构建需要 `aarch64-linux-gnu-gcc`。插件支持 CLIProxyAPI RPC schema 1-3 和原生 ABI 1；宿主声明更高 schema 时会协商到 schema 3。
 
 ```bash
-mkdir -p dist
+# Linux amd64
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
   go build -buildmode=c-shared -trimpath -buildvcs=false \
-  -ldflags="-s -w -X main.version=1.0.0" \
-  -o dist/cap-token-usage-tracker.so .
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.so .
+
+# Linux arm64
+CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+  go build -buildmode=c-shared -trimpath -buildvcs=false \
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.so .
+
+# macOS arm64
+CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+  go build -buildmode=c-shared -trimpath -buildvcs=false \
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.dylib .
 ```
 
-### Linux arm64
-
-Debian/Ubuntu/WSL 通常需要安装：
-
-```bash
-sudo apt install gcc-aarch64-linux-gnu libc6-dev-arm64-cross binutils-aarch64-linux-gnu file curl
-```
-
-构建脚本会检查 Clash HTTP 代理 `7897`，并将 Go 模块下载通过代理完成。默认先尝试 `http://127.0.0.1:7897`；WSL 无法访问 Windows localhost 时会尝试默认网关。也可以显式指定：
-
-```bash
-export CLASH_PROXY_URL=http://<windows-host>:7897
-VERSION=v1.0.0 bash scripts/build-linux-arm64.sh
-```
-
-产物包括：
-
-```text
-dist/cap-token-usage-tracker-v1.0.0-linux-arm64.so  # 版本化发布文件
-dist/cap-token-usage-tracker-v1.0.0-linux-arm64.h   # CGO 生成的 ABI 头文件
-dist/cap-token-usage-tracker.so                      # 安装文件
-```
-
-复制安装文件并运行专用验证：
-
-```bash
-cp dist/cap-token-usage-tracker.so /path/to/CLIProxyAPI/plugins/linux/arm64/
-bash scripts/verify-linux-arm64.sh
-```
-
-验证脚本还会检查 Go 格式、vet、普通/race 测试、ELF64/AArch64/DYN 类型、ABI 导出和共享库一致性，并生成 `dist/SHA256SUMS`。
-
-### Windows amd64
-
-要求 Go 1.26+ 和 MinGW-w64。使用 PowerShell 构建：
+Windows PowerShell：
 
 ```powershell
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "1"
-New-Item -ItemType Directory -Force dist | Out-Null
 go build -buildmode=c-shared -trimpath -buildvcs=false `
   -ldflags="-s -w -X main.version=1.0.0" `
-  -o dist\cap-token-usage-tracker.dll .
+  -o cap-token-usage-tracker.dll .
 ```
 
-如果 MinGW 不在 `PATH`，先将其 `bin` 目录加入环境变量。仓库中的 `build_dll.ps1` 也可用于本地 Windows 构建，但它默认使用 `C:\mingw64\mingw64\bin` 和工作区路径，请按本机安装位置调整。
+`build_dll.ps1` 包含当前工作区固定的 MinGW 和路径设置，在其他机器使用前需要调整。仓库还提供 Linux ARM64 构建/验证脚本和 macOS 验证脚本。
 
-### macOS arm64
-
-在 Apple Silicon macOS 上安装 Go 1.26+ 后，使用系统 clang 构建：
-
-```bash
-mkdir -p dist
-CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-  go build -buildmode=c-shared -trimpath -buildvcs=false \
-  -ldflags="-s -w -X main.version=1.0.0" \
-  -o dist/cap-token-usage-tracker.dylib .
-
-bash scripts/verify-darwin-arm64.sh dist/cap-token-usage-tracker.dylib
-```
-
-验证脚本会从 `/` 工作目录加载标准插件目录中的动态库，并确认默认数据库创建在 `CLIProxyAPI/data`。macOS amd64 不在当前 CI 发布矩阵中；如需 Intel 版本，应在确认 CLIProxyAPI 支持该目标后再增加对应构建。
-
-### CI 发布
-
-每次推送分支提交都会构建上述四个平台，并以 `<下一个补丁版本>-alpha.<Actions 运行序号>` 创建独立的 GitHub 测试版（Pre-release）。推送 `v*` 标签，或手动构建时勾选 `release`，仍会创建正式 GitHub Release。手动构建也可以勾选 `alpha` 发布测试版。发布内容包括：
-
-```text
-cap-token-usage-tracker_<version>_windows_amd64.zip
-cap-token-usage-tracker_<version>_linux_amd64.zip
-cap-token-usage-tracker_<version>_linux_arm64.zip
-cap-token-usage-tracker_<version>_darwin_arm64.zip
-checksums.txt
-```
-
-例如：
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-## 本地开发
+本地验证：
 
 ```bash
 gofmt -w *.go
-go vet ./...
-CGO_ENABLED=0 go test ./...
 go test ./...
+go vet ./...
 ```
 
-`main_cgo.go` 只在 cgo 开启时参与编译。发布前必须实际执行目标平台的 `c-shared` 构建；仅通过 `CGO_ENABLED=0` 测试不能证明 ABI 可以链接。
+发布前必须执行目标平台的 `c-shared` 构建。GitHub Actions 构建四个平台；分支推送发布 `-alpha.<run number>` 测试版，`v*` 标签或手动稳定发布创建正式 Release。
 
-## 更新报告
-
-### v1.2.6 - 2026-07-30
-
-- 修复 CLIProxyAPI 通过反向代理部署在子路径时，仪表盘请求丢失公网路径前缀的问题。
-- 仪表盘现在从当前 iframe 地址识别公网前缀，并统一应用于 `/v0/resource/plugins/`、`/v0/management/plugins/` 和 `/v1/models` 请求。
-- 保持域名根路径部署兼容，并覆盖单层、多层以及包含 `plugins` 路径段的反向代理前缀。
-
-## 协议
+### 协议
 
 [MIT License](LICENSE)
 
@@ -273,50 +309,93 @@ go test ./...
 
 ## English
 
-A persistent Token usage tracking plugin for CLIProxyAPI. The plugin receives usage records via the official `usage_plugin`, registers read-only resource endpoints plus protected model-price persistence and reset endpoints through `management_api`, and provides an embedded iframe dashboard in the Management Center menu.
+CAP Token Usage Tracker is a persistent token-usage statistics plugin for CLIProxyAPI. It receives usage records through the official `usage_plugin`, stores minute-level aggregates, per-request metadata, model prices, and dashboard preferences in a local bbolt database, and registers dashboard and management endpoints through `management_api`.
+
+The plugin does not store prompts, request bodies, or model response bodies. When API-key tracking is enabled, API keys are persisted only as encrypted ciphertext and are revealed only when possible in authenticated full mode.
 
 ### Features
 
-- Persistent aggregation by UTC minute plus per-request usage metadata; request and response bodies are not stored
-- Grouped by model, provider, executor, alias, source, auth type, service tier, reasoning intensity, and failure status
-- Counts requests, failures, input/output/reasoning/cached tokens, latency, TTFT, generation time, TPS, and cache hits
-- Supports arbitrary browser-local date ranges through a two-month calendar; reverse selection automatically orders the dates, with minute/hour/day/week/month trend granularity
-- Self-contained dashboard with no third-party frontend dependencies, including stat cards, stacked Token trends, a model doughnut chart, exact cost trends, a model-efficiency scatter plot, and per-request details
-- Dashboard UI automatically follows the browser language with no button or page reload, supporting English (en), Simplified Chinese (zh-CN), Traditional Chinese (zh-TW), and Russian (ru); each language has its own locale file and additional languages can be added by extending the `locales/` directory
-- Supports Input, Output, Cache Read, and Cache Creation prices, per-request context tiers, free models, pricing coverage, and missing-price reporting
-- Supports manual synchronization from models.dev for the current models returned by CLIProxyAPI `/v1/models`, with configurable provider priority, ignored suffixes, and explicit model mappings; manual prices take precedence
-- Supports linked model drill-down, wheel zoom/pan, responsive mobile chart axes, full/k/m total-Token display, dashboard-wide USD/CNY latest-rate display, filtered CSV export, and Dashboard PNG export
-- Theme is controlled by the CLIProxyAPI Management Center and automatically syncs Follow System, Pure White, Wool Paper, and Dark modes
-- Data reset requires CLIProxyAPI management authentication and explicit `reset` confirmation
+- Persistent aggregation by UTC minute with per-request usage metadata
+- Grouping by model, provider, executor, alias, source, auth type, service tier, reasoning effort, and failure status
+- Request, failure, input/output/reasoning/cache token, latency, TTFT, generation-time, TPS, and cache-hit statistics
+- Today, last 5 hours, last 7 days, last 30 days, current month, and custom local date-time ranges
+- Minute, hour, day, week, and month trend aggregation with wheel zoom and pan
+- Token trends, model share, cost trends, model efficiency, and paginated request details
+- Source, model, and request-result filters
+- Persistent table pagination, sorting, and column visibility preferences
+- API-key filtering, display labels, and isolation between encryption-key generations
+- USD/CNY display and full, k, or m total-token units
+- Automatic Management Center theme and browser-language synchronization
+- Built-in English, Simplified Chinese, Traditional Chinese, and Russian locales
+- Separate normal-mode and full-mode frontends
 - Linux amd64/arm64, Windows amd64, and macOS arm64 `c-shared` builds
 
-### Privacy
+### Normal Mode and Full Mode
 
-The plugin does not store or return via statistics endpoints:
-
-- API Key
-- Auth ID / Auth Index
-- Failure response body
-- Response headers
-- Request or response body
-
-The database contains minute-level aggregation dimensions and counts, per-request usage metadata such as time, model, source, tier, result, latency, reasoning intensity, Token counters, and cache-hit status, plus manually configured or models.dev-synchronized prices, context tiers, matching settings, and synchronization provenance. It does not store prompts, generated content, or other request/response bodies. Dimensions and request metadata may still reflect operational information such as model, source, or service tier. To let the dashboard open without asking for the key again, the read-only resource endpoints do not use CLIProxyAPI management authentication; expose CLIProxyAPI only on a trusted network. Protected management statistics, model-price saves, models.dev synchronization, and reset still require management authentication.
-
-### Configuration
-
-Place the platform-specific shared library in the CLIProxyAPI plugin directory. Keep the filename as `cap-token-usage-tracker`, because CLIProxyAPI derives the plugin ID from the shared library filename:
+Normal mode is the default Management Center page:
 
 ```text
-plugins/linux/arm64/cap-token-usage-tracker.so
+/v0/resource/plugins/cap-token-usage-tracker/dashboard
 ```
 
-Other platform directories and filenames are:
+It displays the project's current non-sensitive statistics, including summaries, trends, cost estimates, grouped dimensions, and per-request metadata. Filters, date ranges, refresh, pagination, sorting, and column settings remain available.
+
+The dashboard requests compact first-screen statistics and renders the summary, model totals, and aggregate trend first. Per-model trends, grouped dimensions, request details, prices, and costs load asynchronously afterwards. The first-screen trend uses five-minute buckets for `24h`, hourly buckets for `7d`, and automatically chooses coarser buckets for longer or custom ranges to keep the point count bounded.
+
+Normal mode does not expose model-price configuration, models.dev synchronization, CSV or Dashboard PNG export, or database backup and restore.
+
+The management-key dialog appears only after the user clicks Full Mode. After CLIProxyAPI Management API authentication succeeds, the plugin issues a random short-lived in-memory capability and navigates to:
 
 ```text
-plugins/linux/amd64/cap-token-usage-tracker.so
-plugins/windows/amd64/cap-token-usage-tracker.dll
-plugins/darwin/arm64/cap-token-usage-tracker.dylib
+/v0/resource/plugins/cap-token-usage-tracker/full-dashboard
 ```
+
+Full mode keeps the same dashboard layout and statistics while adding:
+
+- Model-price editing and persistence
+- Model loading from CLIProxyAPI `/v1/models`
+- models.dev synchronization
+- Filtered CSV and Dashboard PNG export
+- bbolt database backup and restore
+- API-key reveal, filtering, label management, and secret-security status
+
+The full-mode session lasts 15 minutes. The capability is sent in the `X-Full-Mode-Session` header, is not persisted to the database, and is revoked when Full Mode is exited. Navigation temporarily carries it in the URL fragment, which is removed immediately after page initialization. The management key is not retained for later operations; pricing, export, backup, and restore use the current in-memory capability.
+
+The full-mode HTML does not embed protected data. API-key plaintext, labels, and secret-security status are returned on demand only by capability-protected resource endpoints. They are not included in normal-mode HTML, normal resource responses, or static frontend scripts. CSS visibility is not a security boundary.
+
+Normal and full modes share the same statistics source, but normal mode removes API-key plaintext, references, fingerprints, encryption generations, and reveal statuses. Full mode attempts item-by-item decryption with the configured `api_key_secret`; historical ciphertext that cannot be decrypted is shown as "Plaintext unavailable" without affecting other statistics.
+
+Like the legacy `/stats` resource, `/stats/initial` and `/stats/groups` apply redaction: normal-mode responses contain neither an API-key collection nor API-key fields in dimension rows. `/stats/trends` contains only timestamps, model names, and counters. The `api_key_ref` and compatible `api_key_hash` filters require a valid `X-Full-Mode-Session` on every statistics, trend, group, request, and cost endpoint. Requests without that capability receive `403`; query parameters cannot bypass full-mode authorization.
+
+### Privacy and Security Boundary
+
+The plugin does not persist:
+
+- Plaintext API keys
+- Raw Auth ID or Auth Index values
+- Prompts, request bodies, or model response bodies
+- Failure response bodies or response headers
+
+The database contains minute-level aggregates, per-request operational metadata, encrypted API-key ciphertext, keyed fingerprints, encryption-generation metadata, user-defined API-key labels, sanitized source display data, model pricing and synchronization metadata, and dashboard preferences.
+
+Source fields are credential-sanitized. Values that resemble API keys, bearer tokens, or other credentials are not persisted verbatim; the plugin falls back to a normalized provider service address when possible.
+
+API-key tracking defaults to the public secret `123456`. This default only prevents accidental display: anyone who obtains the database or a backup can use it to decrypt stored API keys, so full mode continuously shows a security warning. Production deployments should configure a custom `api_key_secret` of at least 32 bytes. After the custom secret is successfully applied, the warning disappears when full mode is reopened, manually refreshed, or automatically refreshed within 15 seconds.
+
+Changing `api_key_secret` does not delete the database or historical statistics. It creates or activates the matching crypto generation. API keys from generations unavailable under the current secret are shown as "Plaintext unavailable" and become readable again after switching back to the matching older secret. Setting `api_key_secret` to an empty string disables API-key tracking for subsequently received records.
+
+Normal-mode statistics resources do not ask for the management key again, so any browser that can access the CLIProxyAPI Management Center can read these non-sensitive statistics. Do not expose the Management Center directly to untrusted networks. Full-mode entry is protected by the management key, but this does not replace TLS, network access controls, or secure host Management API configuration.
+
+### Installation and Configuration
+
+Place the shared library in the matching CLIProxyAPI plugin directory. Keep the base filename `cap-token-usage-tracker`, because CLIProxyAPI derives the plugin ID from it.
+
+| Platform | Install path |
+|---|---|
+| Linux amd64 | `plugins/linux/amd64/cap-token-usage-tracker.so` |
+| Linux arm64 | `plugins/linux/arm64/cap-token-usage-tracker.so` |
+| Windows amd64 | `plugins/windows/amd64/cap-token-usage-tracker.dll` |
+| macOS arm64 | `plugins/darwin/arm64/cap-token-usage-tracker.dylib` |
 
 CLIProxyAPI configuration example:
 
@@ -332,201 +411,167 @@ plugins:
       flush_interval: 5s
       flush_max_records: 100
       sync_on_record: true
+      api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
+      response_compression: true
+      response_compression_min_bytes: 1024
 ```
 
 | Field | Default | Description |
 |---|---:|---|
-| `data_path` | `CLIProxyAPI/data/token-usage-tracker.db` | bbolt database path; the plugin discovers the fixed `plugins` directory and uses its sibling `data` directory. Explicit relative paths still use the CLIProxyAPI process working directory |
-| `retention_days` | `30` | Retention period in UTC days, range 1–3650 |
-| `flush_interval` | `5s` | Maximum interval for batch flush, range 1 second–1 hour |
-| `flush_max_records` | `100` | Flush immediately after receiving this many records |
-| `sync_on_record` | `true` | Commits each record before acknowledgement by default; set to `false` to enable higher-throughput batching |
+| `data_path` | `CLIProxyAPI/data/token-usage-tracker.db` | bbolt database path; explicit relative paths use the CLIProxyAPI working directory |
+| `retention_days` | `30` | Statistics and request-detail retention, from 1 to 3650 days |
+| `flush_interval` | `5s` | Maximum batch-mode flush interval, from 1 second to 1 hour |
+| `flush_max_records` | `100` | Flush after this many batched records, from 1 to 1000000 |
+| `sync_on_record` | `true` | Commit each record before acknowledgment; set to `false` for batch mode |
+| `api_key_secret` | `123456` | Secret used for API-key encryption and keyed fingerprints; custom values must be at least 32 bytes, and an empty string disables API-key tracking |
+| `response_compression` | `true` | Compress public dashboard HTML and JSON responses when the client supports gzip; management endpoints remain uncompressed |
+| `response_compression_min_bytes` | `1024` | Minimum response size in bytes before gzip is used, from 0 to 16777216 |
 
-The default synchronous mode commits each statistic before `usage.handle` returns, avoiding an unflushed normal-operation window. Batching is enabled only when `sync_on_record: false` is set explicitly; if the process is forcefully terminated in batch mode, up to one `flush_interval` or unflushed `flush_max_records` window may be lost.
+The `api_key_secret` in the example is a placeholder and must be replaced for deployment. Quote YAML values containing special characters such as `#`, `:`, or `{}`; the minimum length is measured in UTF-8 bytes. The secret is stored in CLIProxyAPI configuration, so restrict access to that file, do not commit it to a public repository, and do not distribute it with database backups.
 
-When `data_path` is omitted, the macOS/Linux plugin first searches upward from its loaded shared-library path for the fixed `plugins` directory, then also checks the CLIProxyAPI executable directory and current working directory. Once found, the stable default is `CLIProxyAPI/data/token-usage-tracker.db`. Non-standard layouts that cannot be identified retain the legacy `./data/token-usage-tracker.db` fallback. An existing database at the default location is reused without migration or replacement.
+The default `sync_on_record: true` prioritizes durability. With batch mode enabled, a forced process termination may lose up to one `flush_interval` or the records below the `flush_max_records` threshold.
 
-The plugin creates `<data_path>.handover` next to the database to coordinate hot reloads within the same CLIProxyAPI process. When a replacement instance registers, the retired instance flushes and releases bbolt's exclusive lock before the replacement takes ownership, preventing `open database: timeout`. The first upgrade from a version without this handover mechanism still requires one CLIProxyAPI restart or one uninstall/reinstall; later upgrades can be hot reloaded directly.
+The default `response_compression: true` negotiates gzip through the standard `Accept-Encoding` header, so modern browsers connecting directly to the CLIProxyAPI IP and port also receive compressed responses. Clients that do not support gzip or explicitly send `gzip;q=0` still receive the original response. Binary backups, already encoded responses, and `/v0/management/` endpoints are not compressed by the plugin.
 
-Changing `data_path` switches to a separate database; the old file is not automatically migrated or deleted.
+Without an explicit `data_path`, the plugin resolves the database in this order:
 
-### Pages & Endpoints
+1. Walk upward from the loaded shared-library path to find `plugins`
+2. Check for `plugins` next to the CLIProxyAPI executable
+3. Check for `plugins` in the current working directory
+4. Fall back to `./data/token-usage-tracker.db`
 
-The plugin ID is derived from the shared library filename. Using `cap-token-usage-tracker.so` as an example:
+### Dashboard Operations
 
-- Dashboard: `/v0/resource/plugins/cap-token-usage-tracker/dashboard`
-- Dashboard read-only statistics (no management key): `GET /v0/resource/plugins/cap-token-usage-tracker/stats?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z`
-- Per-request details with current-price `estimated_cost` (no management key): `GET /v0/resource/plugins/cap-token-usage-tracker/requests?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z&offset=0&limit=100&model=gpt-4.1&source=cli`
-- Exact per-request-derived cost summary (no management key): `GET /v0/resource/plugins/cap-token-usage-tracker/costs?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z`
-- Latest USD/CNY display exchange rate (no management key): `GET /v0/resource/plugins/cap-token-usage-tracker/exchange-rate`
-- Model prices, synchronization settings, and last synchronization result (no management key): `GET /v0/resource/plugins/cap-token-usage-tracker/prices`
-- Protected statistics: `GET /v0/management/plugins/cap-token-usage-tracker/stats?range=custom&start=2026-08-19T16:00:00Z&end=2026-08-21T16:00:00Z`
-- Full-replacement model-price save (management key required): `PUT /v0/management/plugins/cap-token-usage-tracker/prices`
-- Synchronize prices from models.dev (management key required): `POST /v0/management/plugins/cap-token-usage-tracker/prices/sync`
-- Protected reset: `POST /v0/management/plugins/cap-token-usage-tracker/reset`
+Both modes support preset or custom date-time ranges, source filtering, trend granularity and zoom, model drill-down, token and currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and preset/custom table page sizes. Statistics reset is available only in full mode and requires the active session plus explicit confirmation.
 
-The dashboard selects calendar days in the browser's local time zone, then converts local midnight at the start and midnight after the end date to RFC3339 `start` and `end` instants. The backend filters the half-open interval `[start, end)`; both parameters are required and `start` must be earlier than `end`. The legacy `range=24h`, `7d`, `30d`, and `retention` values remain supported for API compatibility. Optional `source` applies an exact filter against the same source field shown in request details and is accepted by `/stats`, `/requests`, and `/costs`. Request details are returned newest first; `offset` must be a non-negative integer, `limit` defaults to 100 and is capped at 500, and optional `model` applies an exact model filter.
+Table preferences and the selected range are stored in the plugin database. Custom browser-local times are converted to UTC RFC3339 timestamps for requests.
 
-The Management Center embeds the plugin page in an iframe. The dashboard loads automatically through the read-only resource endpoints, so opening and refreshing it does not require a management key. When CLIProxyAPI is exposed below a reverse-proxy subpath, the dashboard preserves the public prefix from its iframe URL. For example, an iframe at `/cpa/v0/resource/plugins/cap-token-usage-tracker/dashboard` uses `/cpa/v0/resource/plugins/...`, `/cpa/v0/management/plugins/...`, and `/cpa/v1/models` for resource, management, and model-catalog requests. The pricing dialog uses a temporary CLIProxyAPI API Key to load the current model directory from same-origin `/v1/models` with that prefix; a Management Key is still required to save prices, synchronize models.dev, or reset data. Both keys exist only in the current DOM/memory, are cleared when the dialog closes, and are never written to the plugin database, browser storage, or URL. Prices, synchronization settings, and provenance are stored in bbolt, survive page refreshes and service restarts, and are not removed by statistics reset.
+### Model Pricing and Cost Estimation
 
-### Pricing, Context Tiers, and Cost Estimation
+The model-price UI is available only in full mode. Prices are USD per one million tokens and support Input, Output, Cache Read, Cache Creation, context tiers, service-tier-specific pricing, and the `input_excludes_cache` and `input_includes_cache` accounting modes. Models with all rates set to zero are treated as free.
 
-Each model can define the following USD-per-million-Token rates:
+Prices can be maintained manually or synchronized from models.dev. Synchronization first reads the model list currently returned by CLIProxyAPI `/v1/models`, then matches models.dev using provider priority, ignored suffixes, and explicit model mappings.
 
-- `input`
-- `output`
-- `cache_read`
-- `cache_creation`
+Manual entries take precedence and are not overwritten by synchronization. The price book uses a revision to prevent concurrent overwrite. Costs are calculated from individual request records and the matching pricing rule. Requests without a matching price are reported as missing-price coverage rather than silently treated as free.
 
-Context tiers are selected **per request**, never from an aggregated model or time-range total. A tier applies only when `context_tokens > threshold`; equality stays on the lower rate, and the greatest qualifying threshold wins. Each selected tier replaces all four base rates.
+### Export, Backup, and Restore
 
-Cost calculation prefers `CacheReadTokens` and falls back to the compatibility `CachedTokens` counter only when Cache Read is zero; the two counters are never charged together. When the exact provider is `anthropic` or the executor is `claude`, Input is treated as excluding cache tokens. Other and unknown providers default to Input-includes-cache accounting and subtract Cache Read/Creation before charging ordinary Input, avoiding double billing. Reasoning Tokens are not priced separately.
+CSV export, Dashboard PNG export, database backup, database restore, and statistics reset are available only in full mode and validate the active session when executed.
 
-All costs are **current-price estimates** over retained per-request records. Changing or synchronizing prices reprices historical requests; the result is neither a provider invoice nor a request-time price snapshot. An explicitly saved model with all four rates set to zero is a valid free model and still counts as priced coverage. `PUT /prices` is a full replacement: omitting an existing model deletes it. An unchanged models.dev entry retains its provenance; editing it creates a manual override.
+Backup files are limited to 64 MiB. Restore replaces the current database, requires user confirmation, and is checked server-side with `X-Confirm-Restore: replace`. Full mode uses staged uploads for restore payloads, and uploads expire with their session.
 
-models.dev synchronization imports only the current model list freshly loaded from CLIProxyAPI `/v1/models` before the synchronization request; it no longer uses historical models observed in the retention window and never stores the full models.dev catalog. The default provider priority is `openai, google, anthropic`; ignored model suffixes and explicit `source=target` mappings are configurable. Cost lookup always prefers an exact model-price key, then applies the same mappings, catalog-name normalization, and ignored-suffix rules used by synchronization. A normalized fallback is used only when all matching price entries have identical editable rates and tiers; conflicting normalized candidates remain unpriced instead of selecting an arbitrary price. Manual prices are never overwritten by synchronization. Runtime synchronization uses the fixed `https://models.dev/api.json` endpoint, standard Go HTTP proxy environment variables, an approximately 15-second timeout, and a 16 MiB response limit. Concurrent synchronization or a price-book change during an in-flight synchronization returns HTTP 409; remote timeout returns 504 and other catalog/network failures return 502.
+Management-key-protected CLIProxyAPI Management API routes remain available for direct backup, restore, price persistence, price synchronization, and reset operations.
 
-USD/CNY switching affects only dashboard and PNG display. The price book, backend `*_usd` fields, and CSV always remain in USD. The plugin fetches the latest USD/CNY rate from a fixed HTTPS provider, caches it in-process for one hour, and may use a cache no older than 24 hours after refresh failure while marking it as stale. If no rate is available, display remains in USD. Deleting a price first creates a reversible pending-delete draft in the dialog; retained-request costs are recalculated only after the complete price book is saved.
+### Pages and Endpoints
 
-For newly received records where upstream `TotalTokens <= 0`, the plugin uses a saturating positive sum of Input + Output + Reasoning. If that sum is still zero, it falls back to positive `CachedTokens`. Cache Read and Cache Creation do not enter this fallback, and existing historical records are not rewritten.
+The following examples use plugin ID `cap-token-usage-tracker`.
 
-Reset request body:
+Normal resources:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/dashboard` | Normal-mode page |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | Complete aggregates for compatible clients |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/initial` | First-screen summary, compact model totals, and aggregate trend |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/trends` | Downsampled per-model trends loaded after first paint |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/groups` | Server-sorted and paginated detailed dimension statistics |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/requests` | Paginated per-request details |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/costs` | Per-request-derived cost statistics |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/exchange-rate` | Cached USD/CNY exchange rate |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/prices` | Current price book for cost display |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/preferences` | Read or persist dashboard preferences |
+
+Full-mode resources:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-dashboard` | Separate full-mode page shell |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/data` | Validate the session and return protected data |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/api-key-labels` | Save or delete an API-key display label with an `X-API-Key-Label` JSON request header |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/session/revoke` | Revoke the active session |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices` | Read protected pricing configuration |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/save` | Persist pricing through a staged payload |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/prices/sync` | Synchronize models.dev through a staged payload |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/backup` | Download a database backup |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/restore` | Upload and restore a backup in stages |
+| `POST` | `/v0/resource/plugins/cap-token-usage-tracker/full-mode/reset` | Reset statistics after validating the session |
+
+All full-mode resources except the page shell require:
+
+```http
+X-Full-Mode-Session: <session-token>
+```
+
+Management API routes:
+
+| Method | Path | Purpose |
+|---|---|---|
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/full-mode/session` | Issue a session after management authentication |
+| `GET` | `/v0/management/plugins/cap-token-usage-tracker/stats` | Read aggregate statistics |
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/reset` | Reset statistics |
+| `PUT` | `/v0/management/plugins/cap-token-usage-tracker/prices` | Persist model prices |
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/prices/sync` | Synchronize models.dev prices |
+| `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | Download a database backup |
+| `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | Restore the database |
+
+Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`. `/stats/groups` additionally accepts `offset`, `limit`, `sort`, `direction`, `model`, and repeated `exclude_model`; pages are limited to 500 rows.
+
+Reset body:
 
 ```json
 {"confirm":"reset"}
 ```
 
-### Cross-Platform Builds
+Restore headers:
 
-Requirements:
+```http
+Content-Type: application/octet-stream
+X-Confirm-Restore: replace
+```
 
-- Go 1.26+
-- CGO must be enabled for shared-library builds (`CGO_ENABLED=1`)
-- MinGW-w64 for Windows; `aarch64-linux-gnu-gcc` for Linux ARM64 cross-compilation
+### Build and Development
 
-All platforms use `-buildmode=c-shared`. Keep the install filename from the table below, otherwise CLIProxyAPI cannot derive the plugin ID correctly.
-
-| Platform | Architecture | Format | Install filename | CLIProxyAPI directory |
-|---|---|---|---|---|
-| Linux | amd64 | `.so` | `cap-token-usage-tracker.so` | `plugins/linux/amd64/` |
-| Linux | arm64 | `.so` | `cap-token-usage-tracker.so` | `plugins/linux/arm64/` |
-| Windows | amd64 | `.dll` | `cap-token-usage-tracker.dll` | `plugins/windows/amd64/` |
-| macOS | arm64 | `.dylib` | `cap-token-usage-tracker.dylib` | `plugins/darwin/arm64/` |
-
-#### Linux amd64
-
-Build natively on Linux amd64:
+Go 1.26+ and `CGO_ENABLED=1` are required. Windows amd64 requires MinGW-w64; Linux arm64 cross-compilation requires `aarch64-linux-gnu-gcc`. The plugin supports CLIProxyAPI RPC schemas 1-3 and native ABI 1; newer host schemas negotiate down to schema 3.
 
 ```bash
-mkdir -p dist
+# Linux amd64
 CGO_ENABLED=1 GOOS=linux GOARCH=amd64 \
   go build -buildmode=c-shared -trimpath -buildvcs=false \
-  -ldflags="-s -w -X main.version=1.0.0" \
-  -o dist/cap-token-usage-tracker.so .
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.so .
+
+# Linux arm64
+CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
+  go build -buildmode=c-shared -trimpath -buildvcs=false \
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.so .
+
+# macOS arm64
+CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+  go build -buildmode=c-shared -trimpath -buildvcs=false \
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.dylib .
 ```
 
-#### Linux arm64
-
-On Debian/Ubuntu/WSL, install the cross-toolchain:
-
-```bash
-sudo apt install gcc-aarch64-linux-gnu libc6-dev-arm64-cross binutils-aarch64-linux-gnu file curl
-```
-
-The build script checks for a Clash HTTP proxy on port `7897` and downloads Go modules through it. It first tries `http://127.0.0.1:7897`; when WSL cannot reach Windows localhost, it tries the WSL default gateway. You can also set it explicitly:
-
-```bash
-export CLASH_PROXY_URL=http://<windows-host>:7897
-VERSION=v1.0.0 bash scripts/build-linux-arm64.sh
-```
-
-Artifacts:
-
-```text
-dist/cap-token-usage-tracker-v1.0.0-linux-arm64.so  # Versioned release file
-dist/cap-token-usage-tracker-v1.0.0-linux-arm64.h   # CGO-generated ABI header
-dist/cap-token-usage-tracker.so                      # Install file
-```
-
-Install the shared library and run the dedicated verification:
-
-```bash
-cp dist/cap-token-usage-tracker.so /path/to/CLIProxyAPI/plugins/linux/arm64/
-bash scripts/verify-linux-arm64.sh
-```
-
-The verification script also checks Go formatting, vet, normal/race tests, ELF64/AArch64/DYN type, ABI exports, and byte-level consistency, then generates `dist/SHA256SUMS`.
-
-#### Windows amd64
-
-Install Go 1.26+ and MinGW-w64, then build from PowerShell:
+Windows PowerShell:
 
 ```powershell
 $env:GOOS = "windows"
 $env:GOARCH = "amd64"
 $env:CGO_ENABLED = "1"
-New-Item -ItemType Directory -Force dist | Out-Null
 go build -buildmode=c-shared -trimpath -buildvcs=false `
   -ldflags="-s -w -X main.version=1.0.0" `
-  -o dist\cap-token-usage-tracker.dll .
+  -o cap-token-usage-tracker.dll .
 ```
 
-If MinGW is not on `PATH`, add its `bin` directory first. The repository's `build_dll.ps1` can also be used for a local Windows build, but it assumes `C:\mingw64\mingw64\bin` and this workspace path; adjust those values for your machine.
+`build_dll.ps1` contains workspace-specific MinGW and directory paths and must be adjusted for other machines. The repository also includes Linux ARM64 build/verification scripts and a macOS verification script.
 
-#### macOS arm64
-
-On Apple Silicon macOS, install Go 1.26+ and build with the system clang:
-
-```bash
-mkdir -p dist
-CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
-  go build -buildmode=c-shared -trimpath -buildvcs=false \
-  -ldflags="-s -w -X main.version=1.0.0" \
-  -o dist/cap-token-usage-tracker.dylib .
-
-bash scripts/verify-darwin-arm64.sh dist/cap-token-usage-tracker.dylib
-```
-
-The verification script loads the library from the standard plugin layout with `/` as the working directory and confirms that the default database is created under `CLIProxyAPI/data`. macOS amd64 is not in the current CI release matrix. Add it only after confirming that the target CLIProxyAPI runtime supports that architecture.
-
-#### CI Releases
-
-Every branch push builds all four targets and creates a distinct GitHub test pre-release named `<next-patch-version>-alpha.<Actions run number>`. Pushing a `v*` tag, or enabling `release` for a manual run, still creates a stable GitHub Release. Manual runs can also enable `alpha` to publish a test pre-release. Each release contains:
-
-```text
-cap-token-usage-tracker_<version>_windows_amd64.zip
-cap-token-usage-tracker_<version>_linux_amd64.zip
-cap-token-usage-tracker_<version>_linux_arm64.zip
-cap-token-usage-tracker_<version>_darwin_arm64.zip
-checksums.txt
-```
-
-For example:
-
-```bash
-git tag v1.0.0
-git push origin v1.0.0
-```
-
-### Local Development
+Local verification:
 
 ```bash
 gofmt -w *.go
-go vet ./...
-CGO_ENABLED=0 go test ./...
 go test ./...
+go vet ./...
 ```
 
-`main_cgo.go` only participates in compilation when cgo is enabled. Before release, an actual `c-shared` build for the target platform must be performed; passing `CGO_ENABLED=0` tests alone does not prove the ABI can link.
-
-### Release Notes
-
-#### v1.2.6 - 2026-07-30
-
-- Fixed dashboard requests dropping the public path prefix when CLIProxyAPI is deployed below a reverse-proxy subpath.
-- The dashboard now derives the public prefix from its iframe URL and applies it consistently to `/v0/resource/plugins/`, `/v0/management/plugins/`, and `/v1/models` requests.
-- Root deployments remain compatible, with coverage for single-level, nested, and `plugins`-containing proxy prefixes.
-- Verified with the full Go test suite, `go vet`, and JavaScript path checks for root, `/cpa`, nested, and `plugins`-containing prefixes.
+Run an actual target-platform `c-shared` build before release. GitHub Actions builds all four targets; branch pushes publish `-alpha.<run number>` prereleases, while `v*` tags or manual stable releases publish normal releases.
 
 ### License
 

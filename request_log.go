@@ -36,6 +36,18 @@ type RequestPage struct {
 	Items             []RequestDetail `json:"items"`
 }
 
+func (p *RequestPage) Redact() {
+	for i := range p.Items {
+		p.Items[i].Dimensions.Redact()
+	}
+}
+
+func (p *RequestPage) Reveal(decrypt DecryptFunc) {
+	for i := range p.Items {
+		p.Items[i].Dimensions.Reveal(decrypt)
+	}
+}
+
 func requestDetailForUsage(usage normalizedUsage, sequence uint64) RequestDetail {
 	generationNS := usage.LatencyNS
 	if usage.TTFTNS > 0 && usage.LatencyNS >= usage.TTFTNS {
