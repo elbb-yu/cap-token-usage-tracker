@@ -34,14 +34,14 @@ func TestManagementRegistrationUsesDynamicPluginID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(registration.Routes) != 7 || registration.Routes[0].Method != http.MethodPost || registration.Routes[0].Path != "/plugins/custom-id/full-mode/session" || registration.Routes[1].Path != "/plugins/custom-id/stats" || registration.Routes[3].Method != http.MethodPut || registration.Routes[3].Path != "/plugins/custom-id/prices" || registration.Routes[4].Path != "/plugins/custom-id/prices/sync" || registration.Routes[5].Method != http.MethodGet || registration.Routes[5].Path != "/plugins/custom-id/backup" || registration.Routes[6].Method != http.MethodPost || registration.Routes[6].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 20 {
+	if len(registration.Routes) != 7 || registration.Routes[0].Method != http.MethodPost || registration.Routes[0].Path != "/plugins/custom-id/full-mode/session" || registration.Routes[1].Path != "/plugins/custom-id/stats" || registration.Routes[3].Method != http.MethodPut || registration.Routes[3].Path != "/plugins/custom-id/prices" || registration.Routes[4].Path != "/plugins/custom-id/prices/sync" || registration.Routes[5].Method != http.MethodGet || registration.Routes[5].Path != "/plugins/custom-id/backup" || registration.Routes[6].Method != http.MethodPost || registration.Routes[6].Path != "/plugins/custom-id/restore" || len(registration.Resources) != 21 {
 		t.Fatalf("unexpected registration: %+v", registration)
 	}
 	resourcePaths := make(map[string]bool, len(registration.Resources))
 	for _, resource := range registration.Resources {
 		resourcePaths[resource.Path] = true
 	}
-	for _, path := range []string{"/dashboard", "/full-dashboard", "/full-mode/data", "/full-mode/api-key-labels", "/full-mode/session/revoke", "/full-mode/prices", "/full-mode/prices/save", "/full-mode/prices/sync", "/full-mode/backup", "/full-mode/restore", "/full-mode/reset", "/stats", "/stats/initial", "/stats/trends", "/stats/groups", "/requests", "/costs", "/exchange-rate", "/prices", "/preferences"} {
+	for _, path := range []string{"/dashboard", "/full-dashboard", "/full-mode/data", "/full-mode/api-key-labels", "/full-mode/session/revoke", "/full-mode/prices", "/full-mode/prices/save", "/full-mode/prices/sync", "/full-mode/backup", "/full-mode/restore", "/full-mode/reset", "/stats", "/stats/initial", "/stats/trends", "/stats/groups", "/requests", "/requests/heatmap", "/costs", "/exchange-rate", "/prices", "/preferences"} {
 		if !resourcePaths[path] {
 			t.Fatalf("registration missing resource %q: %+v", path, registration.Resources)
 		}
@@ -120,6 +120,91 @@ func TestCompactStatsResourcesShapePagingAndMethods(t *testing.T) {
 		if response.StatusCode != http.StatusMethodNotAllowed || response.Headers.Get("Allow") != http.MethodGet {
 			t.Fatalf("method restriction for %s = %+v", path, response)
 		}
+	}
+}
+
+func TestRequestHeatmapResource(t *testing.T) {
+	config := testConfig(t)
+	config.SyncOnRecord = true
+	store, err := openStore(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{store: store, config: config}
+	defer runtime.shutdown()
+
+	registration, err := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runtime.registerManagement(registration); err != nil {
+		t.Fatal(err)
+	}
+
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for _, usage := range []normalizedUsage{
+		{Dimensions: Dimensions{Model: "alpha", Source: "cli"}, RequestedAt: base, Counters: Counters{Requests: 1, TotalTokens: 10}},
+		{Dimensions: Dimensions{Model: "beta", Source: "web", Failed: true}, RequestedAt: base.Add(time.Minute), Counters: Counters{Requests: 1, FailedRequests: 1, TotalTokens: 10}},
+		{Dimensions: Dimensions{Model: "beta", Source: "cli"}, RequestedAt: base.Add(2 * time.Minute), Counters: Counters{Requests: 1, TotalTokens: 10}},
+	} {
+		if err := store.Record(usage); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	call := func(method string, query url.Values) pluginapi.ManagementResponse {
+		t.Helper()
+		raw, err := json.Marshal(pluginapi.ManagementRequest{Method: method, Path: runtime.routes.resourceRequestHeatmapPath, Query: query})
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := runtime.handleManagement(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response
+	}
+	query := url.Values{
+		"range":     {"custom"},
+		"start":     {base.Add(-time.Minute).Format(time.RFC3339)},
+		"end":       {base.Add(5 * time.Minute).Format(time.RFC3339)},
+		"tz_offset": {"480"},
+	}
+	response := call(http.MethodGet, query)
+	var heatmap RequestHeatmap
+	if response.StatusCode != http.StatusOK || json.Unmarshal(response.Body, &heatmap) != nil || heatmap.Total != 3 || heatmap.Range != "custom" {
+		t.Fatalf("heatmap response = %+v, payload=%+v", response, heatmap)
+	}
+	for _, requestedAt := range []time.Time{base, base.Add(time.Minute), base.Add(2 * time.Minute)} {
+		localTime := requestedAt.Add(8 * time.Hour)
+		day := (int(localTime.Weekday()) + 6) % 7
+		if heatmap.Counts[day][localTime.Hour()] != 3 {
+			t.Fatalf("heatmap counts = %+v, want all requests at day=%d hour=%d", heatmap.Counts, day, localTime.Hour())
+		}
+	}
+
+	query.Set("model", "alpha")
+	query.Set("source", "cli")
+	query.Set("result", "success")
+	response = call(http.MethodGet, query)
+	if response.StatusCode != http.StatusOK || json.Unmarshal(response.Body, &heatmap) != nil || heatmap.Total != 1 {
+		t.Fatalf("filtered heatmap response = %+v, payload=%+v", response, heatmap)
+	}
+
+	for key, value := range map[string]string{"tz_offset": "invalid", "result": "invalid"} {
+		invalidQuery := url.Values{}
+		for queryKey, queryValues := range query {
+			invalidQuery[queryKey] = append([]string(nil), queryValues...)
+		}
+		invalidQuery.Set(key, value)
+		response = call(http.MethodGet, invalidQuery)
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("invalid %s response = %+v", key, response)
+		}
+	}
+	response = call(http.MethodPost, query)
+	if response.StatusCode != http.StatusMethodNotAllowed || response.Headers.Get("Allow") != http.MethodGet {
+		t.Fatalf("heatmap method restriction = %+v", response)
 	}
 }
 

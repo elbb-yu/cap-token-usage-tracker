@@ -26,6 +26,13 @@ type RequestDetail struct {
 	EstimatedCost *EstimatedCost `json:"estimated_cost,omitempty"`
 }
 
+type RequestHeatmap struct {
+	GeneratedAt time.Time     `json:"generated_at"`
+	Range       string        `json:"range"`
+	Counts      [7][24]uint64 `json:"counts"`
+	Total       uint64        `json:"total"`
+}
+
 type RequestPage struct {
 	GeneratedAt       time.Time       `json:"generated_at"`
 	Range             string          `json:"range"`

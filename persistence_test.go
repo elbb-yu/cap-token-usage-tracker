@@ -639,6 +639,20 @@ func TestStorePersistsAndQueriesPerRequestDetails(t *testing.T) {
 	if _, err := store.queryRequestPageBySource(queryRange, 0, 100, "", "", "unknown"); err == nil {
 		t.Fatal("invalid result filter was accepted")
 	}
+	localOffset := 8 * 60
+	localTime := base.Add(time.Duration(localOffset) * time.Minute)
+	day := (int(localTime.Weekday()) + 6) % 7
+	heatmap, err := store.queryRequestHeatmap(queryRange, "", usageFilter{}, "", localOffset)
+	if err != nil || heatmap.Total != 3 || heatmap.Counts[day][localTime.Hour()] != 3 {
+		t.Fatalf("unexpected request heatmap: %+v, %v", heatmap, err)
+	}
+	heatmap, err = store.queryRequestHeatmap(queryRange, "alpha", newUsageFilter("cli", ""), "success", localOffset)
+	if err != nil || heatmap.Total != 1 || heatmap.Counts[day][localTime.Hour()] != 1 {
+		t.Fatalf("unexpected filtered request heatmap: %+v, %v", heatmap, err)
+	}
+	if _, err := store.queryRequestHeatmap(queryRange, "", usageFilter{}, "unknown", localOffset); err == nil {
+		t.Fatal("heatmap accepted invalid result filter")
+	}
 
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
