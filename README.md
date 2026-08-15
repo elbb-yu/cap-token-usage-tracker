@@ -119,7 +119,7 @@ plugins:
     cap-token-usage-tracker:
       enabled: true
       priority: 0
-      retention_days: 30
+      retention_days: 365
       flush_interval: 5s
       flush_max_records: 100
       sync_on_record: true
@@ -131,7 +131,7 @@ plugins:
 | 字段 | 默认值 | 说明 |
 |---|---:|---|
 | `data_path` | `CLIProxyAPI/data/token-usage-tracker.db` | bbolt 数据库路径；显式相对路径以 CLIProxyAPI 进程工作目录为基准 |
-| `retention_days` | `30` | 统计和逐请求明细保留天数，范围 1-3650 |
+| `retention_days` | `365` | 统计和逐请求明细保留天数，范围 1-3650 |
 | `flush_interval` | `5s` | 批量模式最长刷盘间隔，范围 1 秒-1 小时 |
 | `flush_max_records` | `100` | 批量模式达到该记录数时立即刷盘，范围 1-1000000 |
 | `sync_on_record` | `true` | 每条记录提交数据库后再确认；设为 `false` 时启用批量模式 |
@@ -407,7 +407,7 @@ plugins:
     cap-token-usage-tracker:
       enabled: true
       priority: 0
-      retention_days: 30
+      retention_days: 365
       flush_interval: 5s
       flush_max_records: 100
       sync_on_record: true
@@ -419,7 +419,7 @@ plugins:
 | Field | Default | Description |
 |---|---:|---|
 | `data_path` | `CLIProxyAPI/data/token-usage-tracker.db` | bbolt database path; explicit relative paths use the CLIProxyAPI working directory |
-| `retention_days` | `30` | Statistics and request-detail retention, from 1 to 3650 days |
+| `retention_days` | `365` | Statistics and request-detail retention, from 1 to 3650 days |
 | `flush_interval` | `5s` | Maximum batch-mode flush interval, from 1 second to 1 hour |
 | `flush_max_records` | `100` | Flush after this many batched records, from 1 to 1000000 |
 | `sync_on_record` | `true` | Commit each record before acknowledgment; set to `false` for batch mode |
