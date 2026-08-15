@@ -88,20 +88,6 @@ type requestQueryResult struct {
 	err  error
 }
 
-type heatmapQueryCommand struct {
-	queryRange usageRange
-	model      string
-	filter     usageFilter
-	result     string
-	tzOffset   int
-	resp       chan heatmapQueryResult
-}
-
-type heatmapQueryResult struct {
-	heatmap RequestHeatmap
-	err     error
-}
-
 type priceQueryCommand struct{ resp chan priceQueryResult }
 type priceQueryResult struct {
 	response ModelPricesResponse
@@ -381,15 +367,6 @@ func (s *Store) QueryRequests(rangeName string, offset, limit int, model string)
 
 func (s *Store) queryRequestPage(queryRange usageRange, offset, limit int, model string) (RequestPage, error) {
 	return s.queryRequestPageByFilter(queryRange, offset, limit, model, usageFilter{}, "")
-}
-
-func (s *Store) queryRequestHeatmap(queryRange usageRange, model string, filter usageFilter, resultFilter string, tzOffset int) (RequestHeatmap, error) {
-	resp := make(chan heatmapQueryResult, 1)
-	if err := s.send(heatmapQueryCommand{queryRange: queryRange, model: model, filter: filter, result: resultFilter, tzOffset: tzOffset, resp: resp}); err != nil {
-		return RequestHeatmap{}, err
-	}
-	result := <-resp
-	return result.heatmap, result.err
 }
 
 func (s *Store) queryRequestPageBySource(queryRange usageRange, offset, limit int, model, source, resultFilter string) (RequestPage, error) {
@@ -704,15 +681,6 @@ func (s *Store) run(actor *storeActor) {
 				}
 				page, err := actor.queryRequests(item.queryRange, item.offset, item.limit, item.model, item.filter, item.result, now)
 				item.resp <- requestQueryResult{page: page, err: err}
-			case heatmapQueryCommand:
-				now := time.Now().UTC()
-				if err := actor.flush(now, true); err != nil {
-					actor.lastFlushErr = err
-					item.resp <- heatmapQueryResult{err: err}
-					continue
-				}
-				heatmap, err := actor.queryRequestHeatmap(item.queryRange, item.model, item.filter, item.result, item.tzOffset, now)
-				item.resp <- heatmapQueryResult{heatmap: heatmap, err: err}
 			case preferencesQueryCommand:
 				item.resp <- preferencesResult{preferences: cloneDashboardPreferences(actor.dashboardPreferences)}
 			case savePreferencesCommand:
@@ -2544,62 +2512,6 @@ func (a *storeActor) queryRequests(queryRange usageRange, offset, limit int, mod
 		return RequestPage{}, fmt.Errorf("query request details: %w", err)
 	}
 	return page, nil
-}
-
-func (a *storeActor) queryRequestHeatmap(queryRange usageRange, model string, filter usageFilter, resultFilter string, tzOffset int, now time.Time) (RequestHeatmap, error) {
-	if err := queryRange.validate(); err != nil {
-		return RequestHeatmap{}, withStatus(400, "%v", err)
-	}
-	if tzOffset < -14*60 || tzOffset > 14*60 {
-		return RequestHeatmap{}, withStatus(400, "tz_offset must be between -840 and 840 minutes")
-	}
-	if resultFilter != "" && resultFilter != "success" && resultFilter != "failed" {
-		return RequestHeatmap{}, withStatus(400, "result must be success or failed")
-	}
-	heatmap := RequestHeatmap{GeneratedAt: now.UTC(), Range: queryRange.Name}
-	err := a.db.View(func(tx *bolt.Tx) error {
-		requests := tx.Bucket(requestsBucket)
-		if requests == nil {
-			return errors.New("requests bucket is missing")
-		}
-		cursor := requests.Cursor()
-		for key, value := cursor.Last(); key != nil; key, value = cursor.Prev() {
-			if len(key) != 16 || value == nil {
-				continue
-			}
-			requestedAt := time.Unix(0, decodeInt64(key[:8])).UTC()
-			if !queryRange.End.IsZero() && !requestedAt.Before(queryRange.End) {
-				continue
-			}
-			if !queryRange.Start.IsZero() && requestedAt.Before(queryRange.Start) {
-				break
-			}
-			var item RequestDetail
-			if err := json.Unmarshal(value, &item); err != nil {
-				return fmt.Errorf("decode request detail: %w", err)
-			}
-			item.Dimensions = sanitizeDimensionsSource(item.Dimensions)
-			itemModel := item.Model
-			if itemModel == "" {
-				itemModel = "未标记模型"
-			}
-			if (model != "" && itemModel != model) || !filter.matches(item.Dimensions) {
-				continue
-			}
-			if (resultFilter == "success" && item.Failed) || (resultFilter == "failed" && !item.Failed) {
-				continue
-			}
-			localTime := requestedAt.Add(time.Duration(tzOffset) * time.Minute)
-			day := (int(localTime.Weekday()) + 6) % 7
-			heatmap.Counts[day][localTime.Hour()]++
-			heatmap.Total++
-		}
-		return nil
-	})
-	if err != nil {
-		return RequestHeatmap{}, fmt.Errorf("query request heatmap: %w", err)
-	}
-	return heatmap, nil
 }
 
 func requiresExactStats(queryRange usageRange) bool {

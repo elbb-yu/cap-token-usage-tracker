@@ -24,35 +24,34 @@ type managementRegistrationResponse struct {
 }
 
 type registeredRoutes struct {
-	pluginID                   string
-	statsPath                  string
-	resetPath                  string
-	backupPath                 string
-	restorePath                string
-	dashboardPath              string
-	fullDashboardPath          string
-	fullModeSessionPath        string
-	fullModeSessionRevokePath  string
-	fullModeDataPath           string
-	fullModeAPIKeyLabelsPath   string
-	fullModePricesPath         string
-	fullModePricesSavePath     string
-	fullModePriceSyncPath      string
-	fullModeBackupPath         string
-	fullModeRestorePath        string
-	fullModeResetPath          string
-	resourceStatsPath          string
-	resourceStatsInitialPath   string
-	resourceStatsTrendPath     string
-	resourceStatsGroupsPath    string
-	resourceRequestsPath       string
-	resourceRequestHeatmapPath string
-	resourceCostsPath          string
-	resourceExchangeRatePath   string
-	pricesPath                 string
-	priceSyncPath              string
-	resourcePricesPath         string
-	resourcePreferencesPath    string
+	pluginID                  string
+	statsPath                 string
+	resetPath                 string
+	backupPath                string
+	restorePath               string
+	dashboardPath             string
+	fullDashboardPath         string
+	fullModeSessionPath       string
+	fullModeSessionRevokePath string
+	fullModeDataPath          string
+	fullModeAPIKeyLabelsPath  string
+	fullModePricesPath        string
+	fullModePricesSavePath    string
+	fullModePriceSyncPath     string
+	fullModeBackupPath        string
+	fullModeRestorePath       string
+	fullModeResetPath         string
+	resourceStatsPath         string
+	resourceStatsInitialPath  string
+	resourceStatsTrendPath    string
+	resourceStatsGroupsPath   string
+	resourceRequestsPath      string
+	resourceCostsPath         string
+	resourceExchangeRatePath  string
+	pricesPath                string
+	priceSyncPath             string
+	resourcePricesPath        string
+	resourcePreferencesPath   string
 }
 
 func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationResponse, error) {
@@ -66,35 +65,34 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 	}
 
 	routes := registeredRoutes{
-		pluginID:                   pluginID,
-		statsPath:                  "/v0/management/plugins/" + pluginID + "/stats",
-		resetPath:                  "/v0/management/plugins/" + pluginID + "/reset",
-		backupPath:                 "/v0/management/plugins/" + pluginID + "/backup",
-		restorePath:                "/v0/management/plugins/" + pluginID + "/restore",
-		dashboardPath:              "/v0/resource/plugins/" + pluginID + "/dashboard",
-		fullDashboardPath:          "/v0/resource/plugins/" + pluginID + "/full-dashboard",
-		fullModeSessionPath:        "/v0/management/plugins/" + pluginID + "/full-mode/session",
-		fullModeSessionRevokePath:  "/v0/resource/plugins/" + pluginID + "/full-mode/session/revoke",
-		fullModeDataPath:           "/v0/resource/plugins/" + pluginID + "/full-mode/data",
-		fullModeAPIKeyLabelsPath:   "/v0/resource/plugins/" + pluginID + "/full-mode/api-key-labels",
-		fullModePricesPath:         "/v0/resource/plugins/" + pluginID + "/full-mode/prices",
-		fullModePricesSavePath:     "/v0/resource/plugins/" + pluginID + "/full-mode/prices/save",
-		fullModePriceSyncPath:      "/v0/resource/plugins/" + pluginID + "/full-mode/prices/sync",
-		fullModeBackupPath:         "/v0/resource/plugins/" + pluginID + "/full-mode/backup",
-		fullModeRestorePath:        "/v0/resource/plugins/" + pluginID + "/full-mode/restore",
-		fullModeResetPath:          "/v0/resource/plugins/" + pluginID + "/full-mode/reset",
-		resourceStatsPath:          "/v0/resource/plugins/" + pluginID + "/stats",
-		resourceStatsInitialPath:   "/v0/resource/plugins/" + pluginID + "/stats/initial",
-		resourceStatsTrendPath:     "/v0/resource/plugins/" + pluginID + "/stats/trends",
-		resourceStatsGroupsPath:    "/v0/resource/plugins/" + pluginID + "/stats/groups",
-		resourceRequestsPath:       "/v0/resource/plugins/" + pluginID + "/requests",
-		resourceRequestHeatmapPath: "/v0/resource/plugins/" + pluginID + "/requests/heatmap",
-		resourceCostsPath:          "/v0/resource/plugins/" + pluginID + "/costs",
-		resourceExchangeRatePath:   "/v0/resource/plugins/" + pluginID + "/exchange-rate",
-		pricesPath:                 "/v0/management/plugins/" + pluginID + "/prices",
-		priceSyncPath:              "/v0/management/plugins/" + pluginID + "/prices/sync",
-		resourcePricesPath:         "/v0/resource/plugins/" + pluginID + "/prices",
-		resourcePreferencesPath:    "/v0/resource/plugins/" + pluginID + "/preferences",
+		pluginID:                  pluginID,
+		statsPath:                 "/v0/management/plugins/" + pluginID + "/stats",
+		resetPath:                 "/v0/management/plugins/" + pluginID + "/reset",
+		backupPath:                "/v0/management/plugins/" + pluginID + "/backup",
+		restorePath:               "/v0/management/plugins/" + pluginID + "/restore",
+		dashboardPath:             "/v0/resource/plugins/" + pluginID + "/dashboard",
+		fullDashboardPath:         "/v0/resource/plugins/" + pluginID + "/full-dashboard",
+		fullModeSessionPath:       "/v0/management/plugins/" + pluginID + "/full-mode/session",
+		fullModeSessionRevokePath: "/v0/resource/plugins/" + pluginID + "/full-mode/session/revoke",
+		fullModeDataPath:          "/v0/resource/plugins/" + pluginID + "/full-mode/data",
+		fullModeAPIKeyLabelsPath:  "/v0/resource/plugins/" + pluginID + "/full-mode/api-key-labels",
+		fullModePricesPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/prices",
+		fullModePricesSavePath:    "/v0/resource/plugins/" + pluginID + "/full-mode/prices/save",
+		fullModePriceSyncPath:     "/v0/resource/plugins/" + pluginID + "/full-mode/prices/sync",
+		fullModeBackupPath:        "/v0/resource/plugins/" + pluginID + "/full-mode/backup",
+		fullModeRestorePath:       "/v0/resource/plugins/" + pluginID + "/full-mode/restore",
+		fullModeResetPath:         "/v0/resource/plugins/" + pluginID + "/full-mode/reset",
+		resourceStatsPath:         "/v0/resource/plugins/" + pluginID + "/stats",
+		resourceStatsInitialPath:  "/v0/resource/plugins/" + pluginID + "/stats/initial",
+		resourceStatsTrendPath:    "/v0/resource/plugins/" + pluginID + "/stats/trends",
+		resourceStatsGroupsPath:   "/v0/resource/plugins/" + pluginID + "/stats/groups",
+		resourceRequestsPath:      "/v0/resource/plugins/" + pluginID + "/requests",
+		resourceCostsPath:         "/v0/resource/plugins/" + pluginID + "/costs",
+		resourceExchangeRatePath:  "/v0/resource/plugins/" + pluginID + "/exchange-rate",
+		pricesPath:                "/v0/management/plugins/" + pluginID + "/prices",
+		priceSyncPath:             "/v0/management/plugins/" + pluginID + "/prices/sync",
+		resourcePricesPath:        "/v0/resource/plugins/" + pluginID + "/prices",
+		resourcePreferencesPath:   "/v0/resource/plugins/" + pluginID + "/preferences",
 	}
 	r.mu.Lock()
 	r.routes = routes
@@ -161,10 +159,6 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 			{
 				Path:        "/requests",
 				Description: "Read paginated per-request token usage details.",
-			},
-			{
-				Path:        "/requests/heatmap",
-				Description: "Read weekday-by-hour request counts for the current request filters.",
 			},
 			{
 				Path:        "/costs",
@@ -305,11 +299,6 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.requestsResponse(request)
-	case routes.resourceRequestHeatmapPath:
-		if !strings.EqualFold(request.Method, http.MethodGet) {
-			return methodNotAllowed(http.MethodGet), nil
-		}
-		return r.requestHeatmapResponse(request)
 	case routes.resourceCostsPath:
 		if !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
@@ -594,35 +583,6 @@ func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (p
 	}
 	_, generations := r.store.APIKeyCryptoState()
 	return r.sensitiveJSONResponse(http.StatusOK, &page, fullMode, r.crypto, generations), nil
-}
-
-func (r *pluginRuntime) requestHeatmapResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
-	fullMode := r.validFullModeSession(fullModeSessionFromRequest(request))
-	queryRange, err := usageRangeFromQuery(request.Query.Get("range"), request.Query.Get("start"), request.Query.Get("end"), time.Now().UTC())
-	if err != nil {
-		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
-	}
-	tzOffset := 0
-	if raw := request.Query.Get("tz_offset"); raw != "" {
-		tzOffset, err = strconv.Atoi(raw)
-		if err != nil {
-			return jsonResponse(http.StatusBadRequest, map[string]any{"error": "tz_offset must be an integer"}), nil
-		}
-	}
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	if r.store == nil {
-		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
-	}
-	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
-	if err != nil {
-		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
-	}
-	heatmap, err := r.store.queryRequestHeatmap(queryRange, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), apiKeyIdentity), request.Query.Get("result"), tzOffset)
-	if err != nil {
-		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
-	}
-	return jsonResponse(http.StatusOK, &heatmap), nil
 }
 
 func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
