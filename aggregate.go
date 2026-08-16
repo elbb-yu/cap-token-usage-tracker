@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -32,25 +33,65 @@ type usageFilter struct {
 	Source           string
 	APIKeyHash       string
 	APIKeyGeneration uint64
+	APIKeyRefSet     string
 	Model            string
 }
 
 func newUsageFilter(source, apiKeyIdentity string) usageFilter {
+	if apiKeyIdentity == "" {
+		return usageFilter{Source: normalizeDimension(source)}
+	}
+	return newUsageFilterFromIdentities(source, []string{apiKeyIdentity})
+}
+
+func newUsageFilterFromIdentities(source string, identities []string) usageFilter {
 	filter := usageFilter{Source: normalizeDimension(source)}
-	if generation, hash, ok := parseAPIKeyRef(apiKeyIdentity); ok {
-		filter.APIKeyGeneration = generation
-		filter.APIKeyHash = hash
-	} else {
-		filter.APIKeyHash = normalizeDimension(apiKeyIdentity)
+	seen := make(map[string]struct{})
+	refs := make([]string, 0, len(identities))
+	for _, identity := range identities {
+		identity = normalizeDimension(identity)
+		if identity == "" {
+			continue
+		}
+		if generation, hash, ok := parseAPIKeyRef(identity); ok {
+			ref := apiKeyRef(generation, hash)
+			if _, exists := seen[ref]; exists {
+				continue
+			}
+			seen[ref] = struct{}{}
+			refs = append(refs, ref)
+			continue
+		}
+		filter.APIKeyHash = identity
+	}
+	if len(refs) > 0 {
+		sort.Strings(refs)
+		filter.APIKeyRefSet = strings.Join(refs, "\n")
 	}
 	return filter
 }
 
 func (f usageFilter) matches(dimensions Dimensions) bool {
-	return (f.Source == "" || dimensions.Source == f.Source) &&
-		(f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash) &&
-		(f.APIKeyGeneration == 0 || dimensions.APIKeyGeneration == f.APIKeyGeneration) &&
-		(f.Model == "" || compactModelName(dimensions.Model) == f.Model)
+	if f.Source != "" && dimensions.Source != f.Source {
+		return false
+	}
+	if f.Model != "" && compactModelName(dimensions.Model) != f.Model {
+		return false
+	}
+	if f.APIKeyRefSet != "" {
+		ref := apiKeyRef(dimensions.APIKeyGeneration, dimensions.APIKeyHash)
+		if ref == "" {
+			return false
+		}
+		for _, candidate := range strings.Split(f.APIKeyRefSet, "\n") {
+			if candidate == ref {
+				return true
+			}
+		}
+		return false
+	}
+	return (f.APIKeyHash == "" || dimensions.APIKeyHash == f.APIKeyHash) &&
+		(f.APIKeyGeneration == 0 || dimensions.APIKeyGeneration == f.APIKeyGeneration)
 }
 
 func (d *Dimensions) Redact() {

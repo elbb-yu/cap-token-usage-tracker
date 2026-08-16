@@ -356,7 +356,7 @@ func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (plug
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	apiKeyIdentities, err := apiKeyIdentitiesFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
@@ -364,7 +364,7 @@ func (r *pluginRuntime) statsResponse(request pluginapi.ManagementRequest) (plug
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity))
+	stats, err := r.store.queryStatsByFilter(queryRange, newUsageFilterFromIdentities(request.Query.Get("source"), apiKeyIdentities))
 	if err != nil {
 		status := errorHTTPStatus(err)
 		return jsonResponse(status, map[string]any{"error": err.Error()}), nil
@@ -381,11 +381,11 @@ func (r *pluginRuntime) statsFilter(request pluginapi.ManagementRequest, fullMod
 	if r.store == nil {
 		return usageRange{}, usageFilter{}, withStatus(http.StatusServiceUnavailable, "storage is not initialized")
 	}
-	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	apiKeyIdentities, err := apiKeyIdentitiesFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return usageRange{}, usageFilter{}, err
 	}
-	return queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity), nil
+	return queryRange, newUsageFilterFromIdentities(request.Query.Get("source"), apiKeyIdentities), nil
 }
 
 func (r *pluginRuntime) initialStatsResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
@@ -573,11 +573,11 @@ func (r *pluginRuntime) requestsResponse(request pluginapi.ManagementRequest) (p
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	apiKeyIdentities, err := apiKeyIdentitiesFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilter(request.Query.Get("source"), apiKeyIdentity), request.Query.Get("result"))
+	page, err := r.store.queryRequestPageByFilter(queryRange, offset, limit, request.Query.Get("model"), newUsageFilterFromIdentities(request.Query.Get("source"), apiKeyIdentities), request.Query.Get("result"))
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
@@ -596,11 +596,11 @@ func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (plug
 	if r.store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]any{"error": "storage is not initialized"}), nil
 	}
-	apiKeyIdentity, err := apiKeyIdentityFromRequest(request, fullMode, r.store)
+	apiKeyIdentities, err := apiKeyIdentitiesFromRequest(request, fullMode, r.store)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
-	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilter(request.Query.Get("source"), apiKeyIdentity))
+	costs, err := r.store.queryCostsByFilter(queryRange, newUsageFilterFromIdentities(request.Query.Get("source"), apiKeyIdentities))
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]any{"error": err.Error()}), nil
 	}
@@ -608,28 +608,58 @@ func (r *pluginRuntime) costsResponse(request pluginapi.ManagementRequest) (plug
 	return r.sensitiveJSONResponse(http.StatusOK, &costs, fullMode, r.crypto, generations), nil
 }
 
-func apiKeyIdentityFromRequest(request pluginapi.ManagementRequest, fullMode bool, store *Store) (string, error) {
-	ref := request.Query.Get("api_key_ref")
-	hash := request.Query.Get("api_key_hash")
-	if ref == "" && hash == "" {
-		return "", nil
+func apiKeyIdentitiesFromRequest(request pluginapi.ManagementRequest, fullMode bool, store *Store) ([]string, error) {
+	refs := nonEmptyQueryValues(request.Query["api_key_ref"])
+	hashes := nonEmptyQueryValues(request.Query["api_key_hash"])
+	if len(refs) == 0 && len(hashes) == 0 {
+		return nil, nil
 	}
 	if !fullMode {
-		return "", withStatus(http.StatusForbidden, "API key filtering requires a full-mode session")
+		return nil, withStatus(http.StatusForbidden, "API key filtering requires a full-mode session")
 	}
-	if ref != "" && hash != "" {
-		return "", withStatus(http.StatusBadRequest, "api_key_ref and api_key_hash cannot be used together")
+	if len(refs) > 0 && len(hashes) > 0 {
+		return nil, withStatus(http.StatusBadRequest, "api_key_ref and api_key_hash cannot be used together")
 	}
-	if ref != "" {
-		if _, _, ok := parseAPIKeyRef(ref); !ok {
-			return "", withStatus(http.StatusBadRequest, "api_key_ref is invalid")
+	if len(refs) > 0 {
+		seen := make(map[string]struct{}, len(refs))
+		identities := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			if _, _, ok := parseAPIKeyRef(ref); !ok {
+				return nil, withStatus(http.StatusBadRequest, "api_key_ref is invalid")
+			}
+			if _, exists := seen[ref]; exists {
+				continue
+			}
+			seen[ref] = struct{}{}
+			identities = append(identities, ref)
 		}
-		return ref, nil
+		return identities, nil
 	}
+	if len(hashes) > 1 {
+		return nil, withStatus(http.StatusBadRequest, "api_key_hash cannot be repeated; use api_key_ref")
+	}
+	hash := hashes[0]
 	if !validAPIKeyHash(hash) {
-		return "", withStatus(http.StatusBadRequest, "api_key_hash must be 32 lowercase hexadecimal characters")
+		return nil, withStatus(http.StatusBadRequest, "api_key_hash must be 32 lowercase hexadecimal characters")
 	}
-	return store.ResolveAPIKeyHash(hash)
+	if store == nil {
+		return nil, withStatus(http.StatusServiceUnavailable, "storage is not initialized")
+	}
+	resolved, err := store.ResolveAPIKeyHash(hash)
+	if err != nil {
+		return nil, err
+	}
+	return []string{resolved}, nil
+}
+
+func nonEmptyQueryValues(values []string) []string {
+	filtered := make([]string, 0, len(values))
+	for _, value := range values {
+		if value != "" {
+			filtered = append(filtered, value)
+		}
+	}
+	return filtered
 }
 
 func (r *pluginRuntime) exchangeRateResponse() (pluginapi.ManagementResponse, error) {
