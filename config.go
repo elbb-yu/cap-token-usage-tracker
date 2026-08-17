@@ -10,7 +10,7 @@ import (
 )
 
 const (
-	defaultRetentionDays               = 30
+	defaultRetentionDays               = 365
 	defaultFlushInterval               = 5 * time.Second
 	defaultFlushMaxRecords             = 100
 	defaultResponseCompression         = true

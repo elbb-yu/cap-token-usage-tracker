@@ -2,6 +2,15 @@ package main
 
 import "testing"
 
+func TestDefaultRetentionDays(t *testing.T) {
+	config, err := parseConfig(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.RetentionDays != 365 {
+		t.Fatalf("default retention days = %d, want 365", config.RetentionDays)
+	}
+}
 func TestResponseCompressionConfig(t *testing.T) {
 	tests := []struct {
 		name          string

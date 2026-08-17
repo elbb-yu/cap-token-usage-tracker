@@ -133,6 +133,7 @@
   "efficiency.averageTokens": "Average Token / request",
   "efficiency.averageLatency": "Average response latency",
   "chart.noCalls": "No calls in this time range",
+  "chart.noRequests": "No requests in this time interval",
   "chart.noCost": "No cost data in this time range",
   "chart.costUnavailable": "Exact cost data unavailable",
   "chart.noEfficiency": "No model efficiency data in this time range",

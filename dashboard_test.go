@@ -161,7 +161,7 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`function cacheReadTokens(point)`,
 		`function cacheHitRate(input,cacheRead)`,
 		`bucket.cacheRead+=cacheReadTokens(point)`,
-		`item.cacheHitRate=cacheHitRate(item.input,item.cacheRead)`,
+		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
 		`pointStackTotal(point)`,
 		`t('trend.cacheHitRate')`,
 		`model_series`,
@@ -273,7 +273,7 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`params.set('sort',dimensionSortKey)`,
 		`renderGroups(page.items,Number(page.total||0))`,
 		`empty.colSpan=Math.max(1,columns.length)`,
-		`function zoomTrend(factor,anchorRatio)`,
+		`function zoomTrend(points,zoom,factor,anchorRatio,render)`,
 		`{passive:false,capture:true}`,
 		`生成时间`,
 		`缓存命中`,
@@ -295,10 +295,95 @@ func TestDashboardCacheHitRateUsesInputTokenDenominator(t *testing.T) {
 	for _, required := range []string{
 		`function cacheReadTokens(point){var cacheRead=Number(point.cache_read_tokens||0);return cacheRead>0?cacheRead:Number(point.cached_tokens||0);}`,
 		`bucket.cacheRead+=cacheReadTokens(point)`,
-		`item.cacheHitRate=cacheHitRate(item.input,item.cacheRead)`,
+		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
 	} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("dashboardHTML missing cache hit rate aggregation %q", required)
+		}
+	}
+}
+
+func TestDashboardTrendKeepsContinuousTimeBuckets(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		`function nextBucketInfo(info,granularity)`,
+		`function continuousBuckets(map,granularity,emptyBucket)`,
+		`var range=resolvedDateRange(),start=bucketInfo(range.start,granularity),end=bucketInfo(new Date(range.end.getTime()-1),granularity)`,
+		`while(info.stamp<=end.stamp&&steps<100000)`,
+		`function emptyTrendBucket(info){return {key:info.key,label:info.label,stamp:info.stamp,hasData:false`,
+		`function emptyCostBucket(info){return {key:info.key,label:info.label,stamp:info.stamp,hasData:false`,
+		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
+		`if(showCacheHit&&point.hasData&&point.cacheHitRate!==null)`,
+		`item.index===previousIndex+1?'L':'M'`,
+		`if(!point.hasData){tooltipRow(t('chart.noRequests'),t('locale.unavailable'));`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard missing continuous time-series behavior %q", required)
+		}
+	}
+	if strings.Contains(html, `return capSeries(result);`) {
+		t.Fatal("continuous time buckets must not be downsampled because that would skip empty intervals")
+	}
+}
+
+func TestDashboardRefreshPreservesTrendZoom(t *testing.T) {
+	html := dashboardHTML
+	if !strings.Contains(html, "function startTimer(){if(refreshTimer)clearInterval(refreshTimer);refreshTimer=setInterval(function(){load().catch") {
+		t.Fatal("dashboard must retain its automatic refresh path")
+	}
+	if strings.Contains(html, "if(costLoadError)text('error',t('error.costUnavailable',{message:costLoadError}));resetTrendZooms();renderRequestFilters()") {
+		t.Fatal("dashboard render must not reset either trend zoom during a refresh")
+	}
+	for _, required := range []string{
+		"function confirmDateRange(){",
+		"updateGranularityForRange();resetTrendZooms();",
+		"document.getElementById('granularity').addEventListener('change',function(){resetTrendZooms();renderVisuals();})",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard must still reset both trend zooms when their data scope changes: %q", required)
+		}
+	}
+}
+
+func TestDashboardRefreshRetainsMatchingCostSnapshot(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		"currentCosts=null,costQuery='',costLoadError=''",
+		"render(initial,costQuery===query?currentCosts:null)",
+		"costQuery=query;costLoadError='';render(currentData,costs);",
+		"costLoadError=error.message;render(currentData,costQuery===query?currentCosts:null);",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard refresh must retain matching cost data until its replacement arrives: %q", required)
+		}
+	}
+}
+
+func TestDashboardTrendZoomsAreIndependent(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		"tokenTrendZoom={start:0,size:0},costTrendZoom={start:0,size:0}",
+		"function resetTrendZooms(){resetTrendZoom(tokenTrendZoom);resetTrendZoom(costTrendZoom);}",
+		"function renderBar(){var svg=document.getElementById('chart'),fragment=document.createDocumentFragment(),all=aggregateTrend(),series=visibleTrend(all,tokenTrendZoom)",
+		"function renderCostTrend(){var svg=document.getElementById('costChart'),fragment=document.createDocumentFragment(),all=currentCosts?aggregateCostSeries():[];lastCostTrend=all;var series=trendWindow(all,costTrendZoom)",
+		`id="costZoomOutButton"`,
+		`id="costZoomInButton"`,
+		`id="costResetZoomButton"`,
+		`id="costWrap"`,
+		"document.getElementById('zoomInButton').addEventListener('click',function(){zoomTrend(lastTrend,tokenTrendZoom,.7,.5,renderBar);})",
+		"document.getElementById('costZoomInButton').addEventListener('click',function(){zoomTrend(lastCostTrend,costTrendZoom,.7,.5,renderCostTrend);})",
+		"document.getElementById('barWrap').addEventListener('wheel',function(event){if(lastTrend.length<2)return;",
+		"zoomTrend(lastTrend,tokenTrendZoom,factor,ratio,renderBar);",
+		"document.getElementById('costWrap').addEventListener('wheel',function(event){if(lastCostTrend.length<2)return;",
+		"zoomTrend(lastCostTrend,costTrendZoom,factor,ratio,renderCostTrend);",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard missing independent trend zoom behavior %q", required)
+		}
+	}
+	for _, forbidden := range []string{"barZoomStart", "barZoomSize"} {
+		if strings.Contains(html, forbidden) {
+			t.Fatalf("dashboard must not retain shared trend zoom behavior %q", forbidden)
 		}
 	}
 }
@@ -1002,6 +1087,7 @@ func TestDashboardLocalesCatalog(t *testing.T) {
 		"backup.fileTooLarge",
 		"status.loading",
 		"chart.noCalls",
+		"chart.noRequests",
 		"trend.cacheHitRate",
 		"sourceFilter.label",
 		"sourceFilter.all",

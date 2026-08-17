@@ -133,6 +133,7 @@
   "efficiency.averageTokens": "平均 Token / 請求",
   "efficiency.averageLatency": "平均響應延遲",
   "chart.noCalls": "該時間段內暫無調用記錄",
+  "chart.noRequests": "該時間段內沒有請求",
   "chart.noCost": "該時間段內暫無費用數據",
   "chart.costUnavailable": "精確費用數據不可用",
   "chart.noEfficiency": "該時間段內暫無模型效率數據",

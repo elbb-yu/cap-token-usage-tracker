@@ -133,6 +133,7 @@
   "efficiency.averageTokens": "平均 Token / 请求",
   "efficiency.averageLatency": "平均响应延迟",
   "chart.noCalls": "该时间段内暂无调用记录",
+  "chart.noRequests": "该时间段内没有请求",
   "chart.noCost": "该时间段内暂无费用数据",
   "chart.costUnavailable": "精确费用数据不可用",
   "chart.noEfficiency": "该时间段内暂无模型效率数据",

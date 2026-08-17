@@ -133,6 +133,7 @@
   "efficiency.averageTokens": "Среднее токенов на запрос",
   "efficiency.averageLatency": "Средняя задержка ответа",
   "chart.noCalls": "За этот период вызовов нет",
+  "chart.noRequests": "В этом интервале запросов не было",
   "chart.noCost": "За этот период данных стоимости нет",
   "chart.costUnavailable": "Точные данные стоимости недоступны",
   "chart.noEfficiency": "За этот период данных эффективности моделей нет",
