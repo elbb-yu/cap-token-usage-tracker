@@ -166,6 +166,7 @@
   "table.cacheCreation": "Создание кэша",
   "table.totalTokens": "Всего токенов",
   "table.cacheHit": "Попадание в кэш",
+  "table.cacheHitRate": "Доля попадания в кэш",
   "table.estimatedCost": "Оценочная стоимость",
   "table.priceSource": "Источник цены",
   "table.provider": "Провайдер",

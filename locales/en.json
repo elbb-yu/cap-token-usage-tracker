@@ -166,6 +166,7 @@
   "table.cacheCreation": "Cache creation",
   "table.totalTokens": "Total Tokens",
   "table.cacheHit": "Cache hit",
+  "table.cacheHitRate": "Cache hit rate",
   "table.estimatedCost": "Estimated cost",
   "table.priceSource": "Price source",
   "table.provider": "Provider",
