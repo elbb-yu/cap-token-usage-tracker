@@ -23,7 +23,7 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - 提供 Token 趋势、模型占比、费用趋势、模型效率和逐请求明细
 - 支持来源、认证账号、模型和请求结果筛选
 - 支持请求表和维度表分页、排序、列显示偏好持久化
-- 支持按 API Key 筛选、设置显示标签，并隔离不同加密密钥代际
+- 完整模式支持多选 API Key 并按并集筛选、设置显示标签，并隔离不同加密密钥代际
 - 支持 USD/CNY 汇率展示和总 Token 完整值、k、m 单位切换
 - 自动跟随 CLIProxyAPI Management Center 主题和浏览器语言
 - 内置英文、简体中文、繁体中文和俄文
@@ -70,7 +70,7 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 
 普通模式和完整模式共享统计数据源，但普通模式会删除 API Key 明文、引用、指纹、加密代际和解密状态。完整模式会根据当前配置的 `api_key_secret` 逐项解密；无法解密的历史密文显示“明文不可用”，不会影响其他统计数据。
 
-`/stats/initial` 与 `/stats/groups` 和旧版 `/stats` 一样执行脱敏：普通模式响应不含 API Key 集合或任何维度中的 API Key 字段；`/stats/trends` 只包含时间、模型和计数器。`api_key_ref` 与兼容的 `api_key_hash` 筛选在所有统计、趋势、维度、请求和费用接口中都必须携带有效的 `X-Full-Mode-Session`，未授权请求会返回 `403`，不能通过查询参数绕过完整模式鉴权。
+`/stats/initial` 与 `/stats/groups` 和旧版 `/stats` 一样执行脱敏：普通模式响应不含 API Key 集合或任何维度中的 API Key 字段；`/stats/trends` 只包含时间、模型和计数器。完整模式可重复传入 `api_key_ref`，服务端按这些 API Key 的并集筛选；不传该参数即恢复全量。`api_key_ref` 与兼容的单值 `api_key_hash` 筛选在所有统计、趋势、维度、请求和费用接口中都必须携带有效的 `X-Full-Mode-Session`，未授权请求会返回 `403`，不能通过查询参数绕过完整模式鉴权。
 
 ### 隐私与安全边界
 
@@ -242,7 +242,7 @@ X-Full-Mode-Session: <session-token>
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | 下载数据库备份 |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | 恢复数据库 |
 
-统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source` 等筛选参数。完整模式还支持复合 `api_key_ref` 筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。`/stats/groups` 另支持 `offset`、`limit`、`sort`、`direction`、`model` 和重复的 `exclude_model`；每页最多 500 条。
+统计、逐请求和费用接口支持 `range`，或 `start` 与 `end`，以及 `source` 等筛选参数。完整模式还支持重复的 `api_key_ref`，多个值按并集筛选；逐请求接口另支持 `offset`、`limit`、`model` 和 `result`。`/stats/groups` 另支持 `offset`、`limit`、`sort`、`direction`、`model` 和重复的 `exclude_model`；每页最多 500 条。
 
 重置请求正文：
 
@@ -323,7 +323,7 @@ The plugin does not store prompts, request bodies, or model response bodies. Whe
 - Token trends, model share, cost trends, model efficiency, and paginated request details
 - Source, model, and request-result filters
 - Persistent table pagination, sorting, and column visibility preferences
-- API-key filtering, display labels, and isolation between encryption-key generations
+- Full-mode API-key multi-selection with union filtering, display labels, and isolation between encryption-key generations
 - USD/CNY display and full, k, or m total-token units
 - Automatic Management Center theme and browser-language synchronization
 - Built-in English, Simplified Chinese, Traditional Chinese, and Russian locales
@@ -365,7 +365,7 @@ The full-mode HTML does not embed protected data. API-key plaintext, labels, and
 
 Normal and full modes share the same statistics source, but normal mode removes API-key plaintext, references, fingerprints, encryption generations, and reveal statuses. Full mode attempts item-by-item decryption with the configured `api_key_secret`; historical ciphertext that cannot be decrypted is shown as "Plaintext unavailable" without affecting other statistics.
 
-Like the legacy `/stats` resource, `/stats/initial` and `/stats/groups` apply redaction: normal-mode responses contain neither an API-key collection nor API-key fields in dimension rows. `/stats/trends` contains only timestamps, model names, and counters. The `api_key_ref` and compatible `api_key_hash` filters require a valid `X-Full-Mode-Session` on every statistics, trend, group, request, and cost endpoint. Requests without that capability receive `403`; query parameters cannot bypass full-mode authorization.
+Like the legacy `/stats` resource, `/stats/initial` and `/stats/groups` apply redaction: normal-mode responses contain neither an API-key collection nor API-key fields in dimension rows. `/stats/trends` contains only timestamps, model names, and counters. Full mode accepts repeated `api_key_ref` values and filters by their union; omitting the parameter restores the full data set. The `api_key_ref` and compatible single-value `api_key_hash` filters require a valid `X-Full-Mode-Session` on every statistics, trend, group, request, and cost endpoint. Requests without that capability receive `403`; query parameters cannot bypass full-mode authorization.
 
 ### Privacy and Security Boundary
 
@@ -514,7 +514,7 @@ Management API routes:
 | `GET` | `/v0/management/plugins/cap-token-usage-tracker/backup` | Download a database backup |
 | `POST` | `/v0/management/plugins/cap-token-usage-tracker/restore` | Restore the database |
 
-Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`. Full mode also accepts the composite `api_key_ref` filter. The request resource additionally accepts `offset`, `limit`, `model`, and `result`. `/stats/groups` additionally accepts `offset`, `limit`, `sort`, `direction`, `model`, and repeated `exclude_model`; pages are limited to 500 rows.
+Statistics, request, and cost resources accept `range`, or `start` and `end`, plus filters such as `source`. Full mode also accepts repeated `api_key_ref` values and applies their union. The request resource additionally accepts `offset`, `limit`, `model`, and `result`. `/stats/groups` additionally accepts `offset`, `limit`, `sort`, `direction`, `model`, and repeated `exclude_model`; pages are limited to 500 rows.
 
 Reset body:
 

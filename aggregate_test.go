@@ -212,3 +212,42 @@ func TestInitialStatsJSONExcludesDetails(t *testing.T) {
 		}
 	}
 }
+
+func TestUsageFilterUnionsRepeatedAPIKeyRefs(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	hour := now.Truncate(time.Hour).Unix()
+	hashA := strings.Repeat("a", 32)
+	hashB := strings.Repeat("b", 32)
+	hashC := strings.Repeat("c", 32)
+	refA := apiKeyRef(1, hashA)
+	refB := apiKeyRef(1, hashB)
+	data := map[aggregateKey]Counters{
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", Source: "cli", APIKeyHash: hashA, APIKeyGeneration: 1}}: {Requests: 2, TotalTokens: 20},
+		{Hour: hour, Dimensions: Dimensions{Model: "beta", Source: "cli", APIKeyHash: hashB, APIKeyGeneration: 1}}:  {Requests: 3, TotalTokens: 30},
+		{Hour: hour, Dimensions: Dimensions{Model: "gamma", Source: "web", APIKeyHash: hashA, APIKeyGeneration: 1}}: {Requests: 5, TotalTokens: 50},
+		{Hour: hour, Dimensions: Dimensions{Model: "delta", Source: "cli", APIKeyHash: hashC, APIKeyGeneration: 1}}: {Requests: 7, TotalTokens: 70},
+	}
+
+	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, newUsageFilterFromIdentities("cli", []string{refA, "", refB, refA}), now, nil)
+	if stats.Summary.Requests != 5 || stats.Summary.TotalTokens != 50 || len(stats.Groups) != 2 {
+		t.Fatalf("union-filtered stats = %+v", stats)
+	}
+}
+
+func TestUsageFilterANDsModelWithAPIKeyRefUnion(t *testing.T) {
+	now := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	hour := now.Truncate(time.Hour).Unix()
+	hashA := strings.Repeat("a", 32)
+	hashB := strings.Repeat("b", 32)
+	filter := newUsageFilterFromIdentities("", []string{apiKeyRef(1, hashA), apiKeyRef(1, hashB)})
+	filter.Model = "alpha"
+	data := map[aggregateKey]Counters{
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", APIKeyHash: hashA, APIKeyGeneration: 1}}: {Requests: 2, TotalTokens: 20},
+		{Hour: hour, Dimensions: Dimensions{Model: "beta", APIKeyHash: hashB, APIKeyGeneration: 1}}:  {Requests: 3, TotalTokens: 30},
+		{Hour: hour, Dimensions: Dimensions{Model: "alpha", APIKeyHash: hashB, APIKeyGeneration: 1}}: {Requests: 5, TotalTokens: 50},
+	}
+	stats := buildStatsForRangeWithFilter(data, now.Add(-time.Hour), now, usageRange{Name: "retention"}, filter, now, nil)
+	if stats.Summary.Requests != 7 || stats.Summary.TotalTokens != 70 || len(stats.Groups) != 2 {
+		t.Fatalf("model-and-union stats = %+v", stats)
+	}
+}

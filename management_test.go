@@ -743,3 +743,45 @@ func TestManagementBackupAndRestore(t *testing.T) {
 		t.Fatalf("restored model prices = %+v", prices)
 	}
 }
+
+func TestAPIKeyIdentitiesFromRequestUnionsRepeatedRefs(t *testing.T) {
+	hashA := strings.Repeat("a", 32)
+	hashB := strings.Repeat("b", 32)
+	refA := apiKeyRef(1, hashA)
+	refB := apiKeyRef(2, hashB)
+	request := pluginapi.ManagementRequest{Query: url.Values{"api_key_ref": {refA, "", refB, refA}}}
+	got, err := apiKeyIdentitiesFromRequest(request, true, nil)
+	if err != nil {
+		t.Fatalf("parse repeated refs: %v", err)
+	}
+	if len(got) != 2 || got[0] != refA || got[1] != refB {
+		t.Fatalf("identities = %#v, want first-seen unique [%q %q]", got, refA, refB)
+	}
+}
+
+func TestAPIKeyIdentitiesFromRequestRequiresFullModeForRepeatedRefs(t *testing.T) {
+	refA := apiKeyRef(1, strings.Repeat("a", 32))
+	refB := apiKeyRef(1, strings.Repeat("b", 32))
+	_, err := apiKeyIdentitiesFromRequest(pluginapi.ManagementRequest{Query: url.Values{"api_key_ref": {refA, refB}}}, false, nil)
+	if err == nil || errorHTTPStatus(err) != http.StatusForbidden || err.Error() != "API key filtering requires a full-mode session" {
+		t.Fatalf("missing full-mode error = %v", err)
+	}
+}
+
+func TestAPIKeyIdentitiesFromRequestRejectsRefAndHashTogether(t *testing.T) {
+	refA := apiKeyRef(1, strings.Repeat("a", 32))
+	hashB := strings.Repeat("b", 32)
+	_, err := apiKeyIdentitiesFromRequest(pluginapi.ManagementRequest{Query: url.Values{"api_key_ref": {refA}, "api_key_hash": {hashB}}}, true, nil)
+	if err == nil || errorHTTPStatus(err) != http.StatusBadRequest || err.Error() != "api_key_ref and api_key_hash cannot be used together" {
+		t.Fatalf("mixed filter error = %v", err)
+	}
+}
+
+func TestAPIKeyIdentitiesFromRequestRejectsRepeatedHashes(t *testing.T) {
+	hashA := strings.Repeat("a", 32)
+	hashB := strings.Repeat("b", 32)
+	_, err := apiKeyIdentitiesFromRequest(pluginapi.ManagementRequest{Query: url.Values{"api_key_hash": {hashA, hashB}}}, true, nil)
+	if err == nil || errorHTTPStatus(err) != http.StatusBadRequest || err.Error() != "api_key_hash cannot be repeated; use api_key_ref" {
+		t.Fatalf("repeated hash error = %v", err)
+	}
+}
