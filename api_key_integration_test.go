@@ -229,6 +229,172 @@ func TestAPIKeyTrackingRedactionRevealFilteringAndBackup(t *testing.T) {
 	}
 }
 
+func TestRepeatedAPIKeyRefsUnionAcrossStatsRequestsAndCosts(t *testing.T) {
+	config := testConfig(t)
+	config.APIKeySecret = defaultAPIKeySecret
+	config.SyncOnRecord = true
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreWithCrypto(config, crypto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{
+		store:  store,
+		config: config,
+		crypto: crypto,
+		routes: registeredRoutes{
+			pluginID:                 "test",
+			resourceStatsPath:        "/v0/resource/plugins/test/stats",
+			resourceStatsInitialPath: "/v0/resource/plugins/test/stats/initial",
+			resourceStatsTrendPath:   "/v0/resource/plugins/test/stats/trends",
+			resourceStatsGroupsPath:  "/v0/resource/plugins/test/stats/groups",
+			resourceRequestsPath:     "/v0/resource/plugins/test/requests",
+			resourceCostsPath:        "/v0/resource/plugins/test/costs",
+		},
+	}
+	defer runtime.shutdown()
+
+	keyA := "union-client-key-alpha"
+	keyB := "union-client-key-beta"
+	for index, key := range []string{keyA, keyA, keyB} {
+		record, marshalErr := json.Marshal(pluginapi.UsageRecord{
+			Provider:    "test",
+			Model:       "model-" + key[len(key)-4:],
+			Source:      "cli",
+			APIKey:      key,
+			RequestedAt: time.Now().UTC().Add(time.Duration(index-3) * time.Second),
+			Detail:      pluginapi.UsageDetail{InputTokens: int64(index + 1), OutputTokens: 1, TotalTokens: int64(index + 2)},
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		if _, err := runtime.handleUsage(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refA := apiKeyRef(1, apiKeyFingerprint(keyA, crypto.indexKey))
+	refB := apiKeyRef(1, apiKeyFingerprint(keyB, crypto.indexKey))
+	session, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(path string, query url.Values) pluginapi.ManagementResponse {
+		t.Helper()
+		raw, _ := json.Marshal(pluginapi.ManagementRequest{Method: http.MethodGet, Path: path, Query: query, Headers: http.Header{"X-Full-Mode-Session": []string{session}}})
+		response, callErr := runtime.handleManagement(raw)
+		if callErr != nil {
+			t.Fatal(callErr)
+		}
+		return response
+	}
+	query := url.Values{"range": {"24h"}, "api_key_ref": {refA, refB, refA}}
+	statsResponse := call(runtime.routes.resourceStatsPath, query)
+	var stats StatsResponse
+	if statsResponse.StatusCode != http.StatusOK || json.Unmarshal(statsResponse.Body, &stats) != nil || stats.Summary.Requests != 3 || len(stats.APIKeys) != 2 {
+		t.Fatalf("union stats: status=%d body=%s parsed=%+v", statsResponse.StatusCode, statsResponse.Body, stats)
+	}
+	initialResponse := call(runtime.routes.resourceStatsInitialPath, query)
+	var initial InitialStatsResponse
+	if initialResponse.StatusCode != http.StatusOK || json.Unmarshal(initialResponse.Body, &initial) != nil || initial.Summary.Requests != 3 {
+		t.Fatalf("union initial: status=%d body=%s", initialResponse.StatusCode, initialResponse.Body)
+	}
+	trendResponse := call(runtime.routes.resourceStatsTrendPath, query)
+	var trend StatsTrendResponse
+	if trendResponse.StatusCode != http.StatusOK || json.Unmarshal(trendResponse.Body, &trend) != nil || len(trend.ModelSeries) == 0 {
+		t.Fatalf("union trend: status=%d body=%s", trendResponse.StatusCode, trendResponse.Body)
+	}
+	var trendRequests uint64
+	for _, point := range trend.ModelSeries {
+		trendRequests += point.Requests
+	}
+	if trendRequests != 3 {
+		t.Fatalf("union trend requests = %d, want 3: %+v", trendRequests, trend.ModelSeries)
+	}
+	groupsResponse := call(runtime.routes.resourceStatsGroupsPath, url.Values{"range": {"24h"}, "offset": {"0"}, "limit": {"100"}, "api_key_ref": {refA, refB}})
+	var groups GroupStatsPage
+	if groupsResponse.StatusCode != http.StatusOK || json.Unmarshal(groupsResponse.Body, &groups) != nil || groups.Total != 2 {
+		t.Fatalf("union groups: status=%d body=%s parsed=%+v", groupsResponse.StatusCode, groupsResponse.Body, groups)
+	}
+	requestsResponse := call(runtime.routes.resourceRequestsPath, query)
+	var page RequestPage
+	if requestsResponse.StatusCode != http.StatusOK || json.Unmarshal(requestsResponse.Body, &page) != nil || page.Total != 3 {
+		t.Fatalf("union requests: status=%d body=%s parsed=%+v", requestsResponse.StatusCode, requestsResponse.Body, page)
+	}
+	costsResponse := call(runtime.routes.resourceCostsPath, query)
+	var costs CostResponse
+	if costsResponse.StatusCode != http.StatusOK || json.Unmarshal(costsResponse.Body, &costs) != nil || costs.Summary.Requests != 3 {
+		t.Fatalf("union costs: status=%d body=%s parsed=%+v", costsResponse.StatusCode, costsResponse.Body, costs)
+	}
+}
+
+func TestUnknownAPIKeyRefFilterReturnsEmptyResult(t *testing.T) {
+	config := testConfig(t)
+	config.APIKeySecret = defaultAPIKeySecret
+	config.SyncOnRecord = true
+	crypto, err := deriveCryptoContext(config.APIKeySecret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := openStoreWithCrypto(config, crypto)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &pluginRuntime{
+		store:  store,
+		config: config,
+		crypto: crypto,
+		routes: registeredRoutes{
+			pluginID:             "test",
+			resourceStatsPath:    "/v0/resource/plugins/test/stats",
+			resourceRequestsPath: "/v0/resource/plugins/test/requests",
+		},
+	}
+	defer runtime.shutdown()
+	record, _ := json.Marshal(pluginapi.UsageRecord{
+		Provider: "test", Model: "kept", Source: "cli", APIKey: "known-client-key",
+		RequestedAt: time.Now().UTC(), Detail: pluginapi.UsageDetail{TotalTokens: 4},
+	})
+	if _, err := runtime.handleUsage(record); err != nil {
+		t.Fatal(err)
+	}
+	session, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unknown := apiKeyRef(1, strings.Repeat("d", 32))
+	raw, _ := json.Marshal(pluginapi.ManagementRequest{
+		Method:  http.MethodGet,
+		Path:    runtime.routes.resourceStatsPath,
+		Query:   url.Values{"range": {"24h"}, "api_key_ref": {unknown}},
+		Headers: http.Header{"X-Full-Mode-Session": []string{session}},
+	})
+	response, err := runtime.handleManagement(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stats StatsResponse
+	if response.StatusCode != http.StatusOK || json.Unmarshal(response.Body, &stats) != nil || stats.Summary.Requests != 0 {
+		t.Fatalf("unknown ref stats: status=%d body=%s", response.StatusCode, response.Body)
+	}
+	raw, _ = json.Marshal(pluginapi.ManagementRequest{
+		Method:  http.MethodGet,
+		Path:    runtime.routes.resourceRequestsPath,
+		Query:   url.Values{"range": {"24h"}, "api_key_ref": {unknown}},
+		Headers: http.Header{"X-Full-Mode-Session": []string{session}},
+	})
+	response, err = runtime.handleManagement(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var page RequestPage
+	if response.StatusCode != http.StatusOK || json.Unmarshal(response.Body, &page) != nil || page.Total != 0 {
+		t.Fatalf("unknown ref requests: status=%d body=%s parsed=%+v", response.StatusCode, response.Body, page)
+	}
+}
+
 func TestDisabledAPIKeyTrackingDropsAllKeyMaterial(t *testing.T) {
 	config := testConfig(t)
 	config.APIKeySecret = ""
