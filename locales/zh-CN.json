@@ -166,6 +166,7 @@
   "table.cacheCreation": "缓存创建",
   "table.totalTokens": "总 Token 数",
   "table.cacheHit": "缓存命中",
+  "table.cacheHitRate": "缓存命中率",
   "table.estimatedCost": "预估费用",
   "table.priceSource": "价格来源",
   "table.provider": "提供商",

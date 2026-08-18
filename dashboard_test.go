@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -158,10 +159,10 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`bar-cache-read`,
 		`cache-hit-line`,
 		`stroke-dasharray:7 5`,
-		`function cacheReadTokens(point)`,
-		`function cacheHitRate(input,cacheRead)`,
-		`bucket.cacheRead+=cacheReadTokens(point)`,
-		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
+		`function trendCacheReadTokens(point)`,
+		`function trendCacheHitRate(input,cacheRead)`,
+		`bucket.cacheRead+=trendCacheReadTokens(point)`,
+		`item.cacheHitRate=item.hasData?trendCacheHitRate(item.input,item.cacheRead):null;`,
 		`pointStackTotal(point)`,
 		`t('trend.cacheHitRate')`,
 		`model_series`,
@@ -293,9 +294,9 @@ func TestDashboardCacheHitRateUsesInputTokenDenominator(t *testing.T) {
 		t.Fatal("cache hit rate still double-counts cache read tokens in its denominator")
 	}
 	for _, required := range []string{
-		`function cacheReadTokens(point){var cacheRead=Number(point.cache_read_tokens||0);return cacheRead>0?cacheRead:Number(point.cached_tokens||0);}`,
-		`bucket.cacheRead+=cacheReadTokens(point)`,
-		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
+		`function trendCacheReadTokens(point){var cacheRead=Number(point.cache_read_tokens||0);return cacheRead>0?cacheRead:Number(point.cached_tokens||0);}`,
+		`bucket.cacheRead+=trendCacheReadTokens(point)`,
+		`item.cacheHitRate=item.hasData?trendCacheHitRate(item.input,item.cacheRead):null;`,
 	} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("dashboardHTML missing cache hit rate aggregation %q", required)
@@ -312,7 +313,7 @@ func TestDashboardTrendKeepsContinuousTimeBuckets(t *testing.T) {
 		`while(info.stamp<=end.stamp&&steps<100000)`,
 		`function emptyTrendBucket(info){return {key:info.key,label:info.label,stamp:info.stamp,hasData:false`,
 		`function emptyCostBucket(info){return {key:info.key,label:info.label,stamp:info.stamp,hasData:false`,
-		`item.cacheHitRate=item.hasData?cacheHitRate(item.input,item.cacheRead):null;`,
+		`item.cacheHitRate=item.hasData?trendCacheHitRate(item.input,item.cacheRead):null;`,
 		`if(showCacheHit&&point.hasData&&point.cacheHitRate!==null)`,
 		`item.index===previousIndex+1?'L':'M'`,
 		`if(!point.hasData){tooltipRow(t('chart.noRequests'),t('locale.unavailable'));`,
@@ -385,6 +386,73 @@ func TestDashboardTrendZoomsAreIndependent(t *testing.T) {
 		if strings.Contains(html, forbidden) {
 			t.Fatalf("dashboard must not retain shared trend zoom behavior %q", forbidden)
 		}
+	}
+}
+
+func TestDashboardRequestCacheHitRateContract(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		`{key:'cache_hit_rate',label:'table.cacheHitRate',numeric:true}`,
+		`function cacheAccountingKind(point)`,
+		`function cacheHitRateForPoint(point)`,
+		`denominator=input+creation+read`,
+		`return cacheHitRate(cacheReadTokens(point),cacheHitDenominator(point))`,
+		`case 'cache_hit_rate':return cacheHitRateForPoint(item);`,
+		`case 'cache_hit_rate':td=cell(row,formatCacheHitRate(cacheHitRateForPoint(item)),'num');break;`,
+		`t('value.unavailable')`,
+		`localeNumber(rate,{minimumFractionDigits:2,maximumFractionDigits:2})+'%'`,
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard missing request cache hit rate contract %q", required)
+		}
+	}
+}
+
+func TestDashboardRequestCacheHitRateExecution(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is not available")
+	}
+	start := strings.Index(dashboardHTML, "function cacheCounter(point,key)")
+	end := strings.Index(dashboardHTML, "function renderRequestHeaders()")
+	if start < 0 || end < start {
+		t.Fatal("dashboard cache-hit helpers are missing")
+	}
+	script := `
+var requestSortKey='cache_hit_rate',requestSortDirection='asc',formatterLocale='en-US';
+` + dashboardHTML[start:end] + `
+function equal(actual,expected,label){if(actual!==expected)throw new Error(label+': expected '+expected+', got '+actual);}
+function rate(point){return cacheHitRateForPoint(point);}
+var creationOnly=[
+  ['openai',{provider:'openai',input_tokens:100,cache_read_tokens:0,cache_creation_tokens:10,cached_tokens:10}],
+  ['claude',{provider:'claude',input_tokens:10,cache_read_tokens:0,cache_creation_tokens:10,cached_tokens:10}],
+  ['gemini',{provider:'gemini',input_tokens:100,cache_read_tokens:0,cache_creation_tokens:10,cached_tokens:10}]
+];
+creationOnly.forEach(function(example){equal(rate(example[1]),0,example[0]+' creation-only');});
+equal(cacheReadTokens({provider:'unknown',input_tokens:100,cache_read_tokens:0,cache_creation_tokens:10,cached_tokens:10}),0,'unknown creation-only cache read');
+equal(rate({provider:'openai',input_tokens:100,cache_read_tokens:30,cache_creation_tokens:0,cached_tokens:0}),30,'subset read-only');
+equal(rate({provider:'gemini',input_tokens:100,cache_read_tokens:30,cache_creation_tokens:0,cached_tokens:0}),30,'separate read-only');
+equal(rate({provider:'gemini',input_tokens:100,cache_read_tokens:30,cache_creation_tokens:10,cached_tokens:0}),30,'separate read plus creation');
+equal(rate({provider:'claude',input_tokens:10,cache_read_tokens:80,cache_creation_tokens:10,cached_tokens:0}),80,'independent read plus creation');
+equal(rate({provider:'unknown',input_tokens:100,cache_read_tokens:30,cache_creation_tokens:0,cached_tokens:0}),null,'unknown provider');
+var items=[
+  {sequence:1,provider:'openai',input_tokens:100,cache_read_tokens:25,cache_creation_tokens:0,cached_tokens:0},
+  {sequence:2,provider:'unknown',input_tokens:100,cache_read_tokens:25,cache_creation_tokens:0,cached_tokens:0},
+  {sequence:3,provider:'openai',input_tokens:100,cache_read_tokens:50,cache_creation_tokens:0,cached_tokens:0}
+];
+equal(sortedRequestItems(items).map(function(item){return item.sequence;}).join(','),'1,3,2','ascending null last');
+requestSortDirection='desc';
+equal(sortedRequestItems(items).map(function(item){return item.sequence;}).join(','),'3,1,2','descending null last');
+`
+	command := exec.Command(node, "--check", "-")
+	command.Stdin = strings.NewReader(script)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("dashboard cache-hit test script syntax: %v\n%s", err, output)
+	}
+	command = exec.Command(node, "-")
+	command.Stdin = strings.NewReader(script)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("dashboard cache-hit execution: %v\n%s", err, output)
 	}
 }
 
@@ -1089,6 +1157,7 @@ func TestDashboardLocalesCatalog(t *testing.T) {
 		"chart.noCalls",
 		"chart.noRequests",
 		"trend.cacheHitRate",
+		"table.cacheHitRate",
 		"sourceFilter.label",
 		"sourceFilter.all",
 		"range.quickRanges",

@@ -166,6 +166,7 @@
   "table.cacheCreation": "快取創建",
   "table.totalTokens": "總 Token 數",
   "table.cacheHit": "快取命中",
+  "table.cacheHitRate": "快取命中率",
   "table.estimatedCost": "預估費用",
   "table.priceSource": "價格來源",
   "table.provider": "提供商",
