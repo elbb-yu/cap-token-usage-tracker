@@ -65,6 +65,8 @@
   "status.exported": "已導出 {count} 條逐請求記錄 · 精確費用來自 estimated_cost",
   "status.preparingCSV": "正在準備逐請求 CSV…",
   "status.costUnavailable": "費用數據不可用",
+  "status.costRefreshing": "正在刷新，顯示上次結果",
+  "status.costRefreshFailed": "刷新失敗，顯示上次結果",
   "status.priceBook": "價格簿 #{revision}",
   "error.rateUnavailable": "人民幣匯率不可用：{message}",
   "error.costUnavailable": "費用數據不可用：{message}",

@@ -65,6 +65,8 @@
   "status.exported": "Exported {count} request records · exact costs come from estimated_cost",
   "status.preparingCSV": "Preparing request CSV…",
   "status.costUnavailable": "Cost data unavailable",
+  "status.costRefreshing": "Refreshing; showing last result",
+  "status.costRefreshFailed": "Refresh failed; showing last result",
   "status.priceBook": "Price book #{revision}",
   "error.rateUnavailable": "USD/CNY exchange rate unavailable: {message}",
   "error.costUnavailable": "Cost data unavailable: {message}",
