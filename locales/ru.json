@@ -65,6 +65,8 @@
   "status.exported": "Экспортировано записей запросов: {count} · точная стоимость взята из estimated_cost",
   "status.preparingCSV": "Подготовка CSV запросов…",
   "status.costUnavailable": "Данные стоимости недоступны",
+  "status.costRefreshing": "Обновление; показан последний результат",
+  "status.costRefreshFailed": "Ошибка обновления; показан последний результат",
   "status.priceBook": "Прайс-лист #{revision}",
   "error.rateUnavailable": "Курс USD/CNY недоступен: {message}",
   "error.costUnavailable": "Данные стоимости недоступны: {message}",

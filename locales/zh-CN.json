@@ -65,6 +65,8 @@
   "status.exported": "已导出 {count} 条逐请求记录 · 精确费用来自 estimated_cost",
   "status.preparingCSV": "正在准备逐请求 CSV…",
   "status.costUnavailable": "费用数据不可用",
+  "status.costRefreshing": "正在刷新，显示上次结果",
+  "status.costRefreshFailed": "刷新失败，显示上次结果",
   "status.priceBook": "价格簿 #{revision}",
   "error.rateUnavailable": "人民币汇率不可用：{message}",
   "error.costUnavailable": "费用数据不可用：{message}",

@@ -360,6 +360,24 @@ func TestDashboardRefreshRetainsMatchingCostSnapshot(t *testing.T) {
 	}
 }
 
+func TestDashboardRefreshKeepsCostSnapshotDuringRollingRangeRefresh(t *testing.T) {
+	html := dashboardHTML
+	for _, required := range []string{
+		"function clearErrors(){text('error','');costLoadError='';}",
+		"var costLoading=false,baseRender=render,baseRenderVisuals=renderVisuals",
+		"if(!costs&&currentCosts){costLoading=!costLoadError;costs=currentCosts;}",
+		"t('status.costRefreshing')",
+		"t('status.costRefreshFailed')",
+	} {
+		if !strings.Contains(html, required) {
+			t.Fatalf("dashboard must retain the previous cost snapshot during refresh: %q", required)
+		}
+	}
+	if strings.Contains(html, "currentCosts=null,costQuery='',costLoadError='',costLoading") {
+		t.Fatal("dashboard cost state must not clear the cost snapshot on refresh")
+	}
+}
+
 func TestDashboardTrendZoomsAreIndependent(t *testing.T) {
 	html := dashboardHTML
 	for _, required := range []string{
@@ -1154,6 +1172,8 @@ func TestDashboardLocalesCatalog(t *testing.T) {
 		"backup.restored",
 		"backup.fileTooLarge",
 		"status.loading",
+		"status.costRefreshing",
+		"status.costRefreshFailed",
 		"chart.noCalls",
 		"chart.noRequests",
 		"trend.cacheHitRate",
