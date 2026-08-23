@@ -20,6 +20,15 @@ jobs:
         with:
           go-version: "1.26"
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install browser-test dependencies
+        run: npm ci
+
       - name: Resolve and inspect latest SDK
         id: upstream
         shell: bash
@@ -40,12 +49,15 @@ jobs:
 
       - name: Test against latest SDK
         shell: bash
+        env:
+          REQUIRE_BROWSER_TESTS: "1"
+          CHROME_PATH: /usr/bin/google-chrome
         run: |
           set -euo pipefail
           module=github.com/router-for-me/CLIProxyAPI/v7
           go mod edit -require="${module}@${{ steps.upstream.outputs.version }}"
           go mod tidy
-          go test ./...
+          go test -count=1 ./...
 
       - name: Build and run future-schema ABI smoke test
         shell: bash
