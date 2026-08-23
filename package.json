@@ -1,0 +1,7 @@
+{
+  "name": "cap-token-usage-tracker-browser-tests",
+  "private": true,
+  "devDependencies": {
+    "playwright-core": "1.55.0"
+  }
+}
