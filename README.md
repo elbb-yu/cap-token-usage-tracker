@@ -295,8 +295,14 @@ go build -buildmode=c-shared -trimpath -buildvcs=false `
 
 ```bash
 gofmt -w *.go
-go test ./...
+go test -count=1 ./...
 go vet ./...
+```
+
+浏览器日期范围测试在缺少 Node.js、Chrome 或 `playwright-core` 时会跳过。需要本地运行它们时执行 `npm ci`；需要把依赖缺失视为失败时执行：
+
+```bash
+REQUIRE_BROWSER_TESTS=1 CHROME_PATH=/path/to/google-chrome go test -count=1 ./...
 ```
 
 发布前必须执行目标平台的 `c-shared` 构建。GitHub Actions 构建四个平台；分支推送发布 `-alpha.<run number>` 测试版，`v*` 标签或手动稳定发布创建正式 Release。
@@ -567,8 +573,14 @@ Local verification:
 
 ```bash
 gofmt -w *.go
-go test ./...
+go test -count=1 ./...
 go vet ./...
+```
+
+Browser date-range tests skip when Node.js, Chrome, or `playwright-core` is unavailable. Run `npm ci` to include them locally, or require them explicitly:
+
+```bash
+REQUIRE_BROWSER_TESTS=1 CHROME_PATH=/path/to/google-chrome go test -count=1 ./...
 ```
 
 Run an actual target-platform `c-shared` build before release. GitHub Actions builds all four targets; branch pushes publish `-alpha.<run number>` prereleases, while `v*` tags or manual stable releases publish normal releases.
