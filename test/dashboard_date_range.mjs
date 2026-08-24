@@ -4,9 +4,9 @@ import { chromium } from 'playwright-core';
 
 const [htmlPath, chromePath, scenario = 'exclusive'] = process.argv.slice(2);
 if (!htmlPath || !chromePath) {
-  throw new Error('usage: node test/dashboard_date_range.mjs <dashboard-html-path> <google-chrome-path> [exclusive|end-time|end-time-reset|reverse|los-angeles-dst]');
+  throw new Error('usage: node test/dashboard_date_range.mjs <dashboard-html-path> <google-chrome-path> [exclusive|end-time|end-time-reset|quick-preset|reverse|los-angeles-dst]');
 }
-if (!['exclusive', 'end-time', 'end-time-reset', 'reverse', 'los-angeles-dst'].includes(scenario)) {
+if (!['exclusive', 'end-time', 'end-time-reset', 'quick-preset', 'reverse', 'los-angeles-dst'].includes(scenario)) {
   throw new Error(`unknown dashboard date-range browser scenario: ${scenario}`);
 }
 
@@ -96,7 +96,32 @@ try {
   await page.waitForResponse((response) => new URL(response.url()).pathname === `${resourceBase}/stats/initial`);
 
   await page.locator('#rangeButton').click();
-  if (scenario === 'reverse') {
+  if (scenario === 'quick-preset') {
+    await page.locator('[data-range-preset="last_30_days"]').click();
+
+    for (const boundary of ['start', 'end']) {
+      const button = page.locator(`#${boundary}TimeButton`);
+      if (await button.isDisabled()) {
+        throw new Error(`${boundary} time must remain editable after choosing a quick range`);
+      }
+      if (await button.textContent() !== '00:00:00') {
+        throw new Error(`last 30 days ${boundary} must start at local midnight, got ${await button.textContent()}`);
+      }
+    }
+
+    await page.locator('#startTimeButton').click();
+    await setTimePickerValue(page, 'start', { hour: '01', minute: '02', second: '03' });
+    const confirmedResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname === `${resourceBase}/stats/initial`
+        && url.searchParams.get('start') === '2026-07-24T01:02:03.000Z';
+    });
+    await page.locator('#confirmDateRange').click();
+    const confirmed = new URL((await confirmedResponse).url());
+    if (confirmed.searchParams.get('end') !== '2026-08-24T00:00:00.000Z') {
+      throw new Error(`expected manually edited quick range end=2026-08-24T00:00:00.000Z, got ${confirmed.searchParams.get('end')}`);
+    }
+  } else if (scenario === 'reverse') {
     await page.locator('[data-date="2026-08-23"]').click();
     await page.locator('[data-date="2026-08-21"]').click();
   } else {
@@ -104,7 +129,9 @@ try {
     await page.locator('[data-date="2026-08-23"]').click();
   }
 
-  if (scenario === 'exclusive') {
+  if (scenario === 'quick-preset') {
+    // Verified above.
+  } else if (scenario === 'exclusive') {
     const selectedEnd = page.locator('[data-date="2026-08-23"].range-end');
     if (await selectedEnd.count() !== 1) {
       throw new Error('selecting 2026-08-21 through 2026-08-23 must mark 2026-08-23 as .range-end');
