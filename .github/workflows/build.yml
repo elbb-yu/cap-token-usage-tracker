@@ -232,6 +232,43 @@ jobs:
           name: release-darwin-arm64
           path: ${{ env.PLUGIN_ID }}_${{ needs.prepare.outputs.version }}_darwin_arm64.zip
 
+  build-macos-amd64:
+    name: macOS amd64 (.dylib)
+    needs: prepare
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Build .dylib
+        env:
+          CGO_ENABLED: "1"
+          GOOS: darwin
+          GOARCH: amd64
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          go build -buildmode=c-shared -trimpath -buildvcs=false \
+            -ldflags="-s -w -X main.version=${VERSION}" \
+            -o "${{ env.PLUGIN_ID }}.dylib" .
+
+      - name: Verify .dylib and default data path
+        run: bash scripts/verify-darwin-amd64.sh "${{ env.PLUGIN_ID }}.dylib"
+
+      - name: Create zip
+        run: |
+          zipName="${{ env.PLUGIN_ID }}_${{ needs.prepare.outputs.version }}_darwin_amd64.zip"
+          zip "$zipName" "${{ env.PLUGIN_ID }}.dylib"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-darwin-amd64
+          path: ${{ env.PLUGIN_ID }}_${{ needs.prepare.outputs.version }}_darwin_amd64.zip
+
   build-linux-arm64:
     name: Linux arm64 (.so)
     needs: prepare
@@ -274,7 +311,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: [ prepare, build-windows-amd64, build-linux-amd64, build-linux-arm64, build-macos-arm64 ]
+    needs: [ prepare, build-windows-amd64, build-linux-amd64, build-linux-arm64, build-macos-arm64, build-macos-amd64 ]
     runs-on: ubuntu-latest
     if: needs.prepare.outputs.publish == 'true'
     permissions:
