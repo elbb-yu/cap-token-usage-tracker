@@ -28,7 +28,7 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - 自动跟随 CLIProxyAPI Management Center 主题和浏览器语言
 - 内置英文、简体中文、繁体中文和俄文
 - 提供独立的普通模式和完整模式前端
-- 支持 Linux amd64/arm64、Windows amd64 和 macOS arm64 `c-shared` 构建
+- 支持 Linux amd64/arm64、Windows amd64 和 macOS amd64/arm64 `c-shared` 构建
 
 ### 普通模式与完整模式
 
@@ -107,7 +107,10 @@ API Key 跟踪默认使用公开密钥 `123456`。该默认值只能提供误显
 | Linux amd64 | `plugins/linux/amd64/cap-token-usage-tracker.so` |
 | Linux arm64 | `plugins/linux/arm64/cap-token-usage-tracker.so` |
 | Windows amd64 | `plugins/windows/amd64/cap-token-usage-tracker.dll` |
+| macOS amd64 (Intel) | `plugins/darwin/amd64/cap-token-usage-tracker.dylib` |
 | macOS arm64 | `plugins/darwin/arm64/cap-token-usage-tracker.dylib` |
+
+macOS Intel 使用 `darwin/amd64` 插件，Apple Silicon 原生运行使用 `darwin/arm64` 插件；插件架构必须与 CLIProxyAPI 进程架构一致。若 CLIProxyAPI 在 Apple Silicon 上通过 Rosetta 以 x86_64 运行，则使用 `darwin/amd64` 插件。
 
 CLIProxyAPI 配置示例：
 
@@ -272,6 +275,11 @@ CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
   go build -buildmode=c-shared -trimpath -buildvcs=false \
   -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.so .
 
+# macOS amd64 (Intel)
+CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+  go build -buildmode=c-shared -trimpath -buildvcs=false \
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.dylib .
+
 # macOS arm64
 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
   go build -buildmode=c-shared -trimpath -buildvcs=false \
@@ -289,7 +297,7 @@ go build -buildmode=c-shared -trimpath -buildvcs=false `
   -o cap-token-usage-tracker.dll .
 ```
 
-`build_dll.ps1` 包含当前工作区固定的 MinGW 和路径设置，在其他机器使用前需要调整。仓库还提供 Linux ARM64 构建/验证脚本和 macOS 验证脚本。
+`build_dll.ps1` 包含当前工作区固定的 MinGW 和路径设置，在其他机器使用前需要调整。仓库还提供 Linux ARM64 构建/验证脚本以及 macOS amd64/arm64 验证脚本。
 
 本地验证：
 
@@ -305,7 +313,7 @@ go vet ./...
 REQUIRE_BROWSER_TESTS=1 CHROME_PATH=/path/to/google-chrome go test -count=1 ./...
 ```
 
-发布前必须执行目标平台的 `c-shared` 构建。GitHub Actions 构建四个平台；分支推送发布 `-alpha.<run number>` 测试版，`v*` 标签或手动稳定发布创建正式 Release。
+发布前必须执行目标平台的 `c-shared` 构建。GitHub Actions 构建五个平台；分支推送发布 `-alpha.<run number>` 测试版，`v*` 标签或手动稳定发布创建正式 Release。
 
 ### 协议
 
@@ -334,7 +342,7 @@ The plugin does not store prompts, request bodies, or model response bodies. Whe
 - Automatic Management Center theme and browser-language synchronization
 - Built-in English, Simplified Chinese, Traditional Chinese, and Russian locales
 - Separate normal-mode and full-mode frontends
-- Linux amd64/arm64, Windows amd64, and macOS arm64 `c-shared` builds
+- Linux amd64/arm64, Windows amd64, and macOS amd64/arm64 `c-shared` builds
 
 ### Normal Mode and Full Mode
 
@@ -401,7 +409,10 @@ Place the shared library in the matching CLIProxyAPI plugin directory. Keep the 
 | Linux amd64 | `plugins/linux/amd64/cap-token-usage-tracker.so` |
 | Linux arm64 | `plugins/linux/arm64/cap-token-usage-tracker.so` |
 | Windows amd64 | `plugins/windows/amd64/cap-token-usage-tracker.dll` |
+| macOS amd64 (Intel) | `plugins/darwin/amd64/cap-token-usage-tracker.dylib` |
 | macOS arm64 | `plugins/darwin/arm64/cap-token-usage-tracker.dylib` |
+
+Use `darwin/amd64` on Intel Macs and `darwin/arm64` when CLIProxyAPI runs natively on Apple Silicon. The plugin architecture must match the CLIProxyAPI process architecture. Use `darwin/amd64` when CLIProxyAPI runs as x86_64 through Rosetta on Apple Silicon.
 
 CLIProxyAPI configuration example:
 
@@ -550,6 +561,11 @@ CGO_ENABLED=1 GOOS=linux GOARCH=arm64 CC=aarch64-linux-gnu-gcc \
   go build -buildmode=c-shared -trimpath -buildvcs=false \
   -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.so .
 
+# macOS amd64 (Intel)
+CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 \
+  go build -buildmode=c-shared -trimpath -buildvcs=false \
+  -ldflags="-s -w -X main.version=1.0.0" -o cap-token-usage-tracker.dylib .
+
 # macOS arm64
 CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
   go build -buildmode=c-shared -trimpath -buildvcs=false \
@@ -567,7 +583,7 @@ go build -buildmode=c-shared -trimpath -buildvcs=false `
   -o cap-token-usage-tracker.dll .
 ```
 
-`build_dll.ps1` contains workspace-specific MinGW and directory paths and must be adjusted for other machines. The repository also includes Linux ARM64 build/verification scripts and a macOS verification script.
+`build_dll.ps1` contains workspace-specific MinGW and directory paths and must be adjusted for other machines. The repository also includes Linux ARM64 build/verification scripts and macOS amd64/arm64 verification scripts.
 
 Local verification:
 
@@ -583,7 +599,7 @@ Browser date-range tests skip when Node.js, Chrome, or `playwright-core` is unav
 REQUIRE_BROWSER_TESTS=1 CHROME_PATH=/path/to/google-chrome go test -count=1 ./...
 ```
 
-Run an actual target-platform `c-shared` build before release. GitHub Actions builds all four targets; branch pushes publish `-alpha.<run number>` prereleases, while `v*` tags or manual stable releases publish normal releases.
+Run an actual target-platform `c-shared` build before release. GitHub Actions builds all five targets; branch pushes publish `-alpha.<run number>` prereleases, while `v*` tags or manual stable releases publish normal releases.
 
 ### License
 
