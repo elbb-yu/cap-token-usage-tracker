@@ -235,7 +235,7 @@ jobs:
   build-macos-amd64:
     name: macOS amd64 (.dylib)
     needs: prepare
-    runs-on: macos-13
+    runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
 
