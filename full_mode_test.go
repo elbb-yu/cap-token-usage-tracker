@@ -112,6 +112,30 @@ func TestFullModeSessionProtectsFullModeResources(t *testing.T) {
 	}
 }
 
+func TestFullModeSessionUsesConfiguredTTL(t *testing.T) {
+	runtime := &pluginRuntime{config: Config{FullModeSessionTTLMinutes: 2}}
+	first := nowUTC()
+	oldNow := nowUTC
+	nowUTC = func() time.Time { return first }
+	defer func() { nowUTC = oldNow }()
+
+	token, err := runtime.createFullModeSession()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.RawURLEncoding.DecodeString(token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(decoded)
+	runtime.fullModeMu.Lock()
+	session := runtime.fullModeSessions[hash]
+	runtime.fullModeMu.Unlock()
+	if got := session.expiresAt.Sub(first); got != 2*time.Minute {
+		t.Fatalf("configured session TTL = %s, want 2m", got)
+	}
+}
+
 func TestFullModeDefaultSecretWarningTracksSuccessfulReconfigure(t *testing.T) {
 	config := testConfig(t)
 	runtime := &pluginRuntime{}

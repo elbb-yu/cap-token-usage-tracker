@@ -24,7 +24,7 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - 支持来源、认证账号、模型和请求结果筛选
 - 支持请求表和维度表分页、排序、列显示偏好持久化
 - 完整模式支持多选 API Key 并按并集筛选、设置显示标签，并隔离不同加密密钥代际
-- 支持 USD/CNY 汇率展示和总 Token 完整值、k、m 单位切换
+- 支持 USD/CNY 汇率展示和总 Token 完整值、k、m、B（10 亿）单位切换
 - 自动跟随 CLIProxyAPI Management Center 主题和浏览器语言
 - 内置英文、简体中文、繁体中文和俄文
 - 提供独立的普通模式和完整模式前端
@@ -64,7 +64,7 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - bbolt 数据库备份与恢复
 - API Key 明文查看、筛选、标签管理和密钥安全状态提示
 
-完整模式会话有效期为 15 分钟。会话令牌通过 `X-Full-Mode-Session` 请求头发送，不写入数据库；退出完整模式时会主动撤销。页面导航时使用 URL fragment 临时传递令牌，加载后立即从地址栏清除。管理密钥不作为后续操作的鉴权凭据保存在前端，价格、导出、备份和恢复直接使用当前内存中的会话令牌。
+完整模式会话默认有效期为 15 分钟，可通过 `full_mode_session_ttl_minutes` 配置为 1-1440 分钟。会话令牌仅保存在页面 JavaScript 内存中，通过 `X-Full-Mode-Session` 请求头发送；不会写入数据库、日志、`localStorage` 或 `sessionStorage`。刷新或关闭页面、重启插件或 CLIProxyAPI 后需要重新鉴权；退出完整模式时会主动撤销会话。页面导航时使用 URL fragment 临时传递令牌，加载后立即从地址栏清除。管理密钥不作为后续操作的鉴权凭据保存在前端，价格、导出、备份和恢复直接使用当前内存中的会话令牌。
 
 完整模式 HTML 本身不嵌入受保护数据。API Key 明文、标签和密钥安全状态由带 `X-Full-Mode-Session` 鉴权的资源接口按需返回，不能写进普通模式 HTML、普通资源响应或前端静态脚本。仅通过 CSS 隐藏元素不能保护敏感数据。
 
@@ -129,6 +129,7 @@ plugins:
       api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
       response_compression: true
       response_compression_min_bytes: 1024
+      full_mode_session_ttl_minutes: 15
 ```
 
 | 字段 | 默认值 | 说明 |
@@ -141,6 +142,7 @@ plugins:
 | `api_key_secret` | `123456` | API Key 加密和带密钥指纹使用的密钥；自定义值至少 32 字节，空字符串禁用 API Key 跟踪 |
 | `response_compression` | `true` | 客户端支持 gzip 时压缩公共仪表盘 HTML 和 JSON 响应；管理接口保持未压缩 |
 | `response_compression_min_bytes` | `1024` | 启用 gzip 的最小响应字节数，范围 0-16777216 |
+| `full_mode_session_ttl_minutes` | `15` | 完整模式会话有效期（分钟），范围 1-1440；令牌只保存在页面内存，刷新、关闭页面或重启插件后需要重新鉴权 |
 
 示例中的 `api_key_secret` 只是占位符，部署时必须替换。含 `#`、`:`、`{}` 等特殊字符的值应使用 YAML 引号包裹；长度按 UTF-8 字节计算。该密钥会保存在 CLIProxyAPI 配置中，因此应限制配置文件权限，避免提交到公开仓库，也不要与数据库备份一起分发。
 
@@ -163,7 +165,7 @@ plugins:
 - 按来源和认证账号筛选
 - 切换趋势聚合粒度并缩放或平移趋势图
 - 点击模型图表下钻，再次点击清除模型筛选
-- 切换 Token 显示单位和 USD/CNY
+- 切换 Token 显示单位（完整值、k、m、B，其中 B = 1,000,000,000）和 USD/CNY
 - 调整逐请求表和维度表的可见列、排序和分页大小
 - 手动刷新；页面默认每 15 秒自动刷新
 
@@ -189,7 +191,7 @@ plugins:
 - 从备份文件恢复数据库
 - 重置统计数据（需通过完整模式会话鉴权）
 
-备份文件最大为 64 MiB。恢复会替换当前数据库，需要用户确认，并在服务端校验 `X-Confirm-Restore: replace`。完整模式通过分段上传传输恢复数据，每次上传及其会话均有过期时间。
+备份文件最大为 64 MiB。恢复会替换当前数据库，需要用户确认，并在服务端校验 `X-Confirm-Restore: replace`。完整模式通过分段上传传输恢复数据；上传暂存使用独立的短时固定有效期，不随完整模式会话有效期配置变化。
 
 直接调用 CLIProxyAPI Management API 时，仍可使用管理密钥访问备份、恢复、价格保存、价格同步和重置路由。
 
@@ -338,7 +340,7 @@ The plugin does not store prompts, request bodies, or model response bodies. Whe
 - Source, model, and request-result filters
 - Persistent table pagination, sorting, and column visibility preferences
 - Full-mode API-key multi-selection with union filtering, display labels, and isolation between encryption-key generations
-- USD/CNY display and full, k, or m total-token units
+- USD/CNY display and full, k, m, or B (one billion) total-token units
 - Automatic Management Center theme and browser-language synchronization
 - Built-in English, Simplified Chinese, Traditional Chinese, and Russian locales
 - Separate normal-mode and full-mode frontends
@@ -373,7 +375,7 @@ Full mode keeps the same dashboard layout and statistics while adding:
 - bbolt database backup and restore
 - API-key reveal, filtering, label management, and secret-security status
 
-The full-mode session lasts 15 minutes. The capability is sent in the `X-Full-Mode-Session` header, is not persisted to the database, and is revoked when Full Mode is exited. Navigation temporarily carries it in the URL fragment, which is removed immediately after page initialization. The management key is not retained for later operations; pricing, export, backup, and restore use the current in-memory capability.
+The full-mode session defaults to 15 minutes and can be configured from 1 to 1440 minutes with `full_mode_session_ttl_minutes`. The capability is held only in page JavaScript memory and sent in the `X-Full-Mode-Session` header; it is never written to the database, logs, `localStorage`, or `sessionStorage`. Refreshing or closing the page, or restarting the plugin or CLIProxyAPI, requires authentication again; exiting Full Mode revokes the session. Navigation temporarily carries it in the URL fragment, which is removed immediately after page initialization. The management key is not retained for later operations; pricing, export, backup, and restore use the current in-memory capability.
 
 The full-mode HTML does not embed protected data. API-key plaintext, labels, and secret-security status are returned on demand only by capability-protected resource endpoints. They are not included in normal-mode HTML, normal resource responses, or static frontend scripts. CSS visibility is not a security boundary.
 
@@ -431,6 +433,7 @@ plugins:
       api_key_secret: "replace-with-a-random-secret-at-least-32-bytes"
       response_compression: true
       response_compression_min_bytes: 1024
+      full_mode_session_ttl_minutes: 15
 ```
 
 | Field | Default | Description |
@@ -443,6 +446,7 @@ plugins:
 | `api_key_secret` | `123456` | Secret used for API-key encryption and keyed fingerprints; custom values must be at least 32 bytes, and an empty string disables API-key tracking |
 | `response_compression` | `true` | Compress public dashboard HTML and JSON responses when the client supports gzip; management endpoints remain uncompressed |
 | `response_compression_min_bytes` | `1024` | Minimum response size in bytes before gzip is used, from 0 to 16777216 |
+| `full_mode_session_ttl_minutes` | `15` | Full-mode session lifetime in minutes, from 1 to 1440. The token stays only in page memory; refreshing, closing the page, or restarting the plugin requires authentication again |
 
 The `api_key_secret` in the example is a placeholder and must be replaced for deployment. Quote YAML values containing special characters such as `#`, `:`, or `{}`; the minimum length is measured in UTF-8 bytes. The secret is stored in CLIProxyAPI configuration, so restrict access to that file, do not commit it to a public repository, and do not distribute it with database backups.
 
@@ -459,7 +463,7 @@ Without an explicit `data_path`, the plugin resolves the database in this order:
 
 ### Dashboard Operations
 
-Both modes support preset or custom date-time ranges, source filtering, trend granularity and zoom, model drill-down, token and currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and preset/custom table page sizes. Statistics reset is available only in full mode and requires the active session plus explicit confirmation.
+Both modes support preset or custom date-time ranges, source filtering, trend granularity and zoom, model drill-down, full, k, m, or B token units (`B = 1,000,000,000`), currency units, table columns and sorting, manual refresh, 15-second automatic refresh, and preset/custom table page sizes. Statistics reset is available only in full mode and requires the active session plus explicit confirmation.
 
 Table preferences and the selected range are stored in the plugin database. Custom browser-local times are converted to UTC RFC3339 timestamps for requests.
 
@@ -475,7 +479,7 @@ Manual entries take precedence and are not overwritten by synchronization. The p
 
 CSV export, Dashboard PNG export, database backup, database restore, and statistics reset are available only in full mode and validate the active session when executed.
 
-Backup files are limited to 64 MiB. Restore replaces the current database, requires user confirmation, and is checked server-side with `X-Confirm-Restore: replace`. Full mode uses staged uploads for restore payloads, and uploads expire with their session.
+Backup files are limited to 64 MiB. Restore replaces the current database, requires user confirmation, and is checked server-side with `X-Confirm-Restore: replace`. Full mode uses staged uploads for restore payloads; upload staging has its own short fixed lifetime and does not follow the full-mode session lifetime configuration.
 
 Management-key-protected CLIProxyAPI Management API routes remain available for direct backup, restore, price persistence, price synchronization, and reset operations.
 

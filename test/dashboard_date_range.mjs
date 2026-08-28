@@ -4,9 +4,9 @@ import { chromium } from 'playwright-core';
 
 const [htmlPath, chromePath, scenario = 'exclusive'] = process.argv.slice(2);
 if (!htmlPath || !chromePath) {
-  throw new Error('usage: node test/dashboard_date_range.mjs <dashboard-html-path> <google-chrome-path> [exclusive|end-time|end-time-reset|quick-preset|reverse|los-angeles-dst]');
+  throw new Error('usage: node test/dashboard_date_range.mjs <dashboard-html-path> <google-chrome-path> [exclusive|end-time|end-time-reset|quick-preset|reverse|los-angeles-dst|token-unit]');
 }
-if (!['exclusive', 'end-time', 'end-time-reset', 'quick-preset', 'reverse', 'los-angeles-dst'].includes(scenario)) {
+if (!['exclusive', 'end-time', 'end-time-reset', 'quick-preset', 'reverse', 'los-angeles-dst', 'token-unit'].includes(scenario)) {
   throw new Error(`unknown dashboard date-range browser scenario: ${scenario}`);
 }
 
@@ -23,6 +23,14 @@ const emptyInitial = {
   sources: [],
   bucket_seconds: 86400,
 };
+const tokenUnitInitial = {
+  generated_at: '2026-08-23T00:00:00.000Z',
+  last_used: '2026-08-23T12:00:00.000Z',
+  models: [{ model: 'browser-test', requests: 1, input_tokens: 1000000000, output_tokens: 230000000, reasoning_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0, total_tokens: 1230000000 }],
+  sources: [],
+  bucket_seconds: 86400,
+};
+const initialPayload = scenario === 'token-unit' ? tokenUnitInitial : emptyInitial;
 
 async function setTimePickerValue(page, boundary, values) {
   for (const [part, value] of Object.entries(values)) {
@@ -54,7 +62,7 @@ const server = createServer((request, response) => {
     return;
   }
   if (url.pathname === `${resourceBase}/stats/initial`) {
-    sendJSON(emptyInitial);
+    sendJSON(initialPayload);
     return;
   }
   if (url.pathname === `${resourceBase}/stats/trends`) {
@@ -95,6 +103,29 @@ try {
   await page.goto(dashboardURL, { waitUntil: 'domcontentloaded' });
   await page.waitForResponse((response) => new URL(response.url()).pathname === `${resourceBase}/stats/initial`);
 
+  if (scenario === 'token-unit') {
+    const tokenButton = page.locator('#tokenUnitButton');
+    const totalTokens = page.locator('#totalTokens');
+    const expected = [
+      ['完整', '1,230,000,000'],
+      ['k', '1,230,000k'],
+      ['m', '1,230m'],
+      ['B', '1.23B'],
+    ];
+    for (const [buttonText, totalText] of expected) {
+      if (await tokenButton.textContent() !== buttonText) {
+        throw new Error(`expected token unit button ${buttonText}, got ${await tokenButton.textContent()}`);
+      }
+      if (await totalTokens.textContent() !== totalText) {
+        throw new Error(`expected total tokens ${totalText}, got ${await totalTokens.textContent()}`);
+      }
+      await tokenButton.click();
+    }
+    if (await tokenButton.textContent() !== '完整' || await totalTokens.textContent() !== '1,230,000,000') {
+      throw new Error(`expected token unit cycle to return to Full, got ${await tokenButton.textContent()} / ${await totalTokens.textContent()}`);
+    }
+  }
+
   await page.locator('#rangeButton').click();
   if (scenario === 'quick-preset') {
     await page.locator('[data-range-preset="last_30_days"]').click();
@@ -105,7 +136,7 @@ try {
         throw new Error(`${boundary} time must remain editable after choosing a quick range`);
       }
       if (await button.textContent() !== '00:00:00') {
-        throw new Error(`last 30 days ${boundary} must start at local midnight, got ${await button.textContent()}`);
+        throw new Error(`last 30 days ${boundary} must use a midnight boundary, got ${await button.textContent()}`);
       }
     }
 
@@ -114,7 +145,7 @@ try {
     const confirmedResponse = page.waitForResponse((response) => {
       const url = new URL(response.url());
       return url.pathname === `${resourceBase}/stats/initial`
-        && url.searchParams.get('start') === '2026-07-24T01:02:03.000Z';
+        && url.searchParams.get('start') === '2026-07-25T01:02:03.000Z';
     });
     await page.locator('#confirmDateRange').click();
     const confirmed = new URL((await confirmedResponse).url());
