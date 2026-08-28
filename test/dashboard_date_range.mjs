@@ -104,9 +104,8 @@ try {
       if (await button.isDisabled()) {
         throw new Error(`${boundary} time must remain editable after choosing a quick range`);
       }
-      const expectedTime = boundary === 'start' ? '00:00:00' : '12:00:00';
-      if (await button.textContent() !== expectedTime) {
-        throw new Error(`last 30 days ${boundary} must be ${expectedTime}, got ${await button.textContent()}`);
+      if (await button.textContent() !== '00:00:00') {
+        throw new Error(`last 30 days ${boundary} must use a midnight boundary, got ${await button.textContent()}`);
       }
     }
 
@@ -119,10 +118,8 @@ try {
     });
     await page.locator('#confirmDateRange').click();
     const confirmed = new URL((await confirmedResponse).url());
-    const confirmedEnd = new Date(confirmed.searchParams.get('end'));
-    if (confirmedEnd.getTime() < new Date('2026-08-23T12:00:00.000Z').getTime()
-      || confirmedEnd.getTime() >= new Date('2026-08-23T12:01:00.000Z').getTime()) {
-      throw new Error(`expected manually edited quick range end during 2026-08-23T12:00Z, got ${confirmed.searchParams.get('end')}`);
+    if (confirmed.searchParams.get('end') !== '2026-08-24T00:00:00.000Z') {
+      throw new Error(`expected manually edited quick range end=2026-08-24T00:00:00.000Z, got ${confirmed.searchParams.get('end')}`);
     }
   } else if (scenario === 'reverse') {
     await page.locator('[data-date="2026-08-23"]').click();
