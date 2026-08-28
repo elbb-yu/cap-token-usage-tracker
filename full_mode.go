@@ -14,10 +14,8 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
-const fullModeSessionTTL = 15 * time.Minute
-
 const (
-	fullModeUploadTTL       = fullModeSessionTTL
+	fullModeUploadTTL       = 15 * time.Minute
 	fullModeUploadChunkSize = 6000
 	fullModeUploadMaxChunks = 16000
 )
@@ -33,7 +31,18 @@ type fullModeUpload struct {
 	chunks      map[int]string
 }
 
+func (r *pluginRuntime) fullModeSessionTTL() time.Duration {
+	r.mu.RLock()
+	minutes := r.config.FullModeSessionTTLMinutes
+	r.mu.RUnlock()
+	if minutes == 0 {
+		minutes = defaultFullModeSessionTTLMinutes
+	}
+	return time.Duration(minutes) * time.Minute
+}
+
 func (r *pluginRuntime) createFullModeSession() (string, error) {
+	ttl := r.fullModeSessionTTL()
 	var tokenBytes [32]byte
 	if _, err := rand.Read(tokenBytes[:]); err != nil {
 		return "", err
@@ -49,7 +58,7 @@ func (r *pluginRuntime) createFullModeSession() (string, error) {
 			delete(r.fullModeSessions, key)
 		}
 	}
-	r.fullModeSessions[hash] = fullModeSession{expiresAt: now.Add(fullModeSessionTTL)}
+	r.fullModeSessions[hash] = fullModeSession{expiresAt: now.Add(ttl)}
 	r.fullModeMu.Unlock()
 	return base64.RawURLEncoding.EncodeToString(tokenBytes[:]), nil
 }

@@ -150,6 +150,8 @@ func TestDashboardIncludesInteractiveAnalyticsFeatures(t *testing.T) {
 		`var exchangeRateURL=resourceBase+'/exchange-rate'`,
 		`function formatTokenTotal(value)`,
 		`function toggleTokenUnit()`,
+		`B:{suffix:'B',divisor:1e9}`,
+		`order=['full','k','m','B']`,
 		`async function toggleCurrency()`,
 		`id="topModel"`,
 		`id="donut"`,
@@ -1007,6 +1009,7 @@ func TestDashboardModelShareMetricSwitch(t *testing.T) {
 		`function modelShareMetricValue(item)`,
 		`if(modelShareMetric==='requests')return Number(item.requests||0)`,
 		`if(modelShareMetric==='tokens')return Number(item.total_tokens||0)`,
+		`if(modelShareMetric==='tokens')return formatTokenTotal(value)`,
 		`return cost?Number(cost.total_usd||0):0`,
 		`function syncModelShareMetricButtons()`,
 		`var metric=button.getAttribute('data-model-share-metric'),unavailable=metric==='cost'&&!currentCosts`,
@@ -1021,6 +1024,7 @@ func TestDashboardModelShareMetricSwitch(t *testing.T) {
 		`setModelShareMetric(button.getAttribute('data-model-share-metric'))`,
 		`pieTotal=pieModels.reduce(function(sum,item){return sum+modelShareMetricValue(item);},0)`,
 		`canvasText(ctx,formatModelShareMetric(pieTotal,true)`,
+		`tooltipRow(t('chart.totalTokens'),formatTokenTotal(item.total_tokens))`,
 	} {
 		if !strings.Contains(html, required) {
 			t.Fatalf("dashboard missing model-share metric switch contract %q", required)
@@ -1091,7 +1095,7 @@ func TestDashboardTokenSummaryShowsUpstreamComponents(t *testing.T) {
 	for _, required := range []string{
 		`animateText('totalTokens',formatTokenTotal(summary.total_tokens))`,
 		`id="tokenDetail" class="detail" data-i18n="card.tokenDetail"`,
-		`text('tokenDetail',t('card.tokenDetailValues',{inputLabel:t('card.input'),input:fmt(summary.input_tokens),outputLabel:t('card.output'),output:fmt(summary.output_tokens),cacheReadLabel:t('card.cacheRead'),cacheRead:fmt(summary.cache_read_tokens)}));`,
+		`text('tokenDetail',t('card.tokenDetailValues',{inputLabel:t('card.input'),input:formatTokenTotal(summary.input_tokens),outputLabel:t('card.output'),output:formatTokenTotal(summary.output_tokens),cacheReadLabel:t('card.cacheRead'),cacheRead:formatTokenTotal(summary.cache_read_tokens)}));`,
 		`cache_read_tokens`,
 	} {
 		if !strings.Contains(html, required) {

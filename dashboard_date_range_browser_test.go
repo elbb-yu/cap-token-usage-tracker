@@ -99,3 +99,7 @@ func TestDashboardDateRangeQuickPresetIncludesTodayAndAllowsManualTimeInBrowser(
 func TestDashboardDateRangeCalendarAmericaLosAngelesDSTInBrowser(t *testing.T) {
 	runDashboardDateRangeBrowserTest(t, "los-angeles-dst", "dashboard calendar America/Los_Angeles DST browser regression failed")
 }
+
+func TestDashboardTokenUnitCyclesThroughBillionsInBrowser(t *testing.T) {
+	runDashboardDateRangeBrowserTest(t, "token-unit", "dashboard token-unit browser regression failed")
+}

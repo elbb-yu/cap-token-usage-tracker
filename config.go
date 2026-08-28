@@ -11,6 +11,9 @@ import (
 
 const (
 	defaultRetentionDays               = 365
+	defaultFullModeSessionTTLMinutes   = 15
+	minFullModeSessionTTLMinutes       = 1
+	maxFullModeSessionTTLMinutes       = 1440
 	defaultFlushInterval               = 5 * time.Second
 	defaultFlushMaxRecords             = 100
 	defaultResponseCompression         = true
@@ -27,6 +30,7 @@ type Config struct {
 	APIKeySecret                string
 	ResponseCompression         bool
 	ResponseCompressionMinBytes int
+	FullModeSessionTTLMinutes   int
 }
 
 type configYAML struct {
@@ -38,6 +42,7 @@ type configYAML struct {
 	APIKeySecret                *string `yaml:"api_key_secret"`
 	ResponseCompression         *bool   `yaml:"response_compression"`
 	ResponseCompressionMinBytes *int    `yaml:"response_compression_min_bytes"`
+	FullModeSessionTTLMinutes   *int    `yaml:"full_mode_session_ttl_minutes"`
 }
 
 func defaultConfig() Config {
@@ -50,6 +55,7 @@ func defaultConfig() Config {
 		APIKeySecret:                defaultAPIKeySecret,
 		ResponseCompression:         defaultResponseCompression,
 		ResponseCompressionMinBytes: defaultResponseCompressionMinBytes,
+		FullModeSessionTTLMinutes:   defaultFullModeSessionTTLMinutes,
 	}
 }
 
@@ -91,6 +97,9 @@ func parseConfig(raw []byte) (Config, error) {
 	if input.ResponseCompressionMinBytes != nil {
 		cfg.ResponseCompressionMinBytes = *input.ResponseCompressionMinBytes
 	}
+	if input.FullModeSessionTTLMinutes != nil {
+		cfg.FullModeSessionTTLMinutes = *input.FullModeSessionTTLMinutes
+	}
 	return normalizeConfig(cfg)
 }
 
@@ -112,6 +121,9 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.ResponseCompressionMinBytes < 0 || cfg.ResponseCompressionMinBytes > maxResponseCompressionMinBytes {
 		return Config{}, fmt.Errorf("response_compression_min_bytes must be between 0 and %d", maxResponseCompressionMinBytes)
+	}
+	if cfg.FullModeSessionTTLMinutes < minFullModeSessionTTLMinutes || cfg.FullModeSessionTTLMinutes > maxFullModeSessionTTLMinutes {
+		return Config{}, fmt.Errorf("full_mode_session_ttl_minutes must be between %d and %d", minFullModeSessionTTLMinutes, maxFullModeSessionTTLMinutes)
 	}
 	absolute, err := filepath.Abs(filepath.Clean(cfg.DataPath))
 	if err != nil {
