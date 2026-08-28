@@ -689,8 +689,8 @@ func TestDashboardUsesTwoMonthLocalDateRangePicker(t *testing.T) {
 		`function dateRangeQuery()`,
 		`function resolvedDateRange()`,
 		`now.getTime()-5*60*60*1000`,
-		`today.getFullYear(),today.getMonth(),today.getDate()-7`,
-		`today.getFullYear(),today.getMonth(),today.getDate()-30`,
+		`today.getFullYear(),today.getMonth(),today.getDate()-6`,
+		`today.getFullYear(),today.getMonth(),today.getDate()-29`,
 		`new Date(today.getFullYear(),today.getMonth(),1)`,
 
 		`draftRangeMode='custom'`,

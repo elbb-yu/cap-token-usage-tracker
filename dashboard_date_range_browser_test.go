@@ -92,8 +92,8 @@ func TestDashboardDateRangeCalendarEndTimeResetRestoresExclusiveEndInBrowser(t *
 	runDashboardDateRangeBrowserTest(t, "end-time-reset", "dashboard calendar end-time reset browser regression failed")
 }
 
-func TestDashboardDateRangeQuickPresetUsesMidnightsAndAllowsManualTimeInBrowser(t *testing.T) {
-	runDashboardDateRangeBrowserTest(t, "quick-preset", "dashboard quick range midnight and manual-time browser regression failed")
+func TestDashboardDateRangeQuickPresetIncludesTodayAndAllowsManualTimeInBrowser(t *testing.T) {
+	runDashboardDateRangeBrowserTest(t, "quick-preset", "dashboard quick range includes-today and manual-time browser regression failed")
 }
 
 func TestDashboardDateRangeCalendarAmericaLosAngelesDSTInBrowser(t *testing.T) {
