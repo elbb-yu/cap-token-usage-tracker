@@ -288,9 +288,25 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 			if ref == "" {
 				ref = apiKeyRef(option.Generation, option.Hash)
 			}
-			items = append(items, APIKeyQuotaStatus{
-				ID: quotaID(scope), APIKeyRef: ref, MaskedKey: maskedAPIKey(plain), Label: labels[ref],
-			})
+			costs, costErr := store.queryCostsByFilter(allRange, newUsageFilterFromIdentities("", []string{ref}))
+			if costErr != nil {
+				return jsonResponse(errorHTTPStatus(costErr), map[string]string{"error": costErr.Error()}), nil
+			}
+			status := APIKeyQuotaStatus{
+				ID:               quotaID(scope),
+				APIKeyRef:        ref,
+				MaskedKey:        maskedAPIKey(plain),
+				Label:            labels[ref],
+				UsedUSD:          costs.Summary.TotalUSD,
+				Requests:         costs.Summary.Requests,
+				PricedRequests:   costs.Summary.PricedRequests,
+				UnpricedRequests: costs.Summary.UnpricedRequests,
+				MissingPrices:    costs.MissingPrices,
+			}
+			if status.UnpricedRequests > 0 {
+				status.BlockReason = "存在未定价模型，费用不完整"
+			}
+			items = append(items, status)
 		}
 	}
 	sort.Slice(items, func(i, j int) bool {
