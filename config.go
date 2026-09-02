@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -28,6 +29,8 @@ type Config struct {
 	FlushMaxRecords             int
 	SyncOnRecord                bool
 	APIKeySecret                string
+	ManagementAPIURL            string
+	ManagementAPIKey            string
 	ResponseCompression         bool
 	ResponseCompressionMinBytes int
 	FullModeSessionTTLMinutes   int
@@ -40,6 +43,8 @@ type configYAML struct {
 	FlushMaxRecords             *int    `yaml:"flush_max_records"`
 	SyncOnRecord                *bool   `yaml:"sync_on_record"`
 	APIKeySecret                *string `yaml:"api_key_secret"`
+	ManagementAPIURL            string  `yaml:"management_api_url"`
+	ManagementAPIKey            string  `yaml:"management_api_key"`
 	ResponseCompression         *bool   `yaml:"response_compression"`
 	ResponseCompressionMinBytes *int    `yaml:"response_compression_min_bytes"`
 	FullModeSessionTTLMinutes   *int    `yaml:"full_mode_session_ttl_minutes"`
@@ -91,6 +96,8 @@ func parseConfig(raw []byte) (Config, error) {
 	if input.APIKeySecret != nil {
 		cfg.APIKeySecret = *input.APIKeySecret
 	}
+	cfg.ManagementAPIURL = strings.TrimSpace(input.ManagementAPIURL)
+	cfg.ManagementAPIKey = strings.TrimSpace(input.ManagementAPIKey)
 	if input.ResponseCompression != nil {
 		cfg.ResponseCompression = *input.ResponseCompression
 	}
@@ -118,6 +125,15 @@ func normalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.APIKeySecret != "" && cfg.APIKeySecret != defaultAPIKeySecret && len([]byte(cfg.APIKeySecret)) < 32 {
 		return Config{}, fmt.Errorf("api_key_secret must be empty, 123456, or at least 32 bytes")
+	}
+	if (cfg.ManagementAPIURL == "") != (cfg.ManagementAPIKey == "") {
+		return Config{}, fmt.Errorf("management_api_url and management_api_key must be configured together")
+	}
+	if cfg.ManagementAPIURL != "" {
+		parsed, err := url.Parse(cfg.ManagementAPIURL)
+		if err != nil || parsed.Host == "" || parsed.User != nil || (parsed.Scheme != "https" && !(parsed.Scheme == "http" && (parsed.Hostname() == "127.0.0.1" || parsed.Hostname() == "localhost"))) {
+			return Config{}, fmt.Errorf("management_api_url must be HTTPS or loopback HTTP without embedded credentials")
+		}
 	}
 	if cfg.ResponseCompressionMinBytes < 0 || cfg.ResponseCompressionMinBytes > maxResponseCompressionMinBytes {
 		return Config{}, fmt.Errorf("response_compression_min_bytes must be between 0 and %d", maxResponseCompressionMinBytes)

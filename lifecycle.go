@@ -54,6 +54,9 @@ type pluginRuntime struct {
 	fullModeMu        sync.Mutex
 	fullModeSessions  map[[32]byte]fullModeSession
 	fullModeUploads   map[string]fullModeUpload
+	configuredKeysMu  sync.Mutex
+	configuredKeys    configuredAPIKeyCache
+	hostAPIKeyClient  hostAPIKeyHTTPClient
 }
 
 var runtimeState = &pluginRuntime{}
@@ -120,6 +123,7 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 		r.crypto = crypto
 		r.apiKeyGeneration = generation
 		r.apiKeyGenerations = generations
+		r.invalidateConfiguredAPIKeys()
 		return nil
 	}
 
@@ -138,6 +142,7 @@ func (r *pluginRuntime) applyConfig(config Config) error {
 	r.fullModeSessions = nil
 	r.fullModeUploads = nil
 	r.fullModeMu.Unlock()
+	r.invalidateConfiguredAPIKeys()
 	if old != nil {
 		if err := old.Close(); err != nil {
 			return fmt.Errorf("close previous store: %w", err)
@@ -210,6 +215,7 @@ func (r *pluginRuntime) shutdown() error {
 	r.fullModeSessions = nil
 	r.fullModeUploads = nil
 	r.fullModeMu.Unlock()
+	r.invalidateConfiguredAPIKeys()
 	if store == nil {
 		return nil
 	}

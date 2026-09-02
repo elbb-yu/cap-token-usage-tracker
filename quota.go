@@ -250,7 +250,9 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 	}
 	now := time.Now().UTC()
 	items := make([]APIKeyQuotaStatus, 0, len(quotas))
+	includedScopes := make(map[string]struct{}, len(quotas))
 	for _, quota := range quotas {
+		includedScopes[quota.CallerScope] = struct{}{}
 		if quota.Label == "" {
 			quota.Label = labels[quota.APIKeyRef]
 		}
@@ -301,7 +303,33 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 				MissingPrices:    costs.MissingPrices,
 			}
 			items = append(items, status)
+			includedScopes[scope] = struct{}{}
 		}
+	}
+	// The host's configured key list can contain a brand-new key with no usage
+	// record yet. Merge those in-memory identities so both public dashboards
+	// show it immediately without persisting or returning plaintext keys.
+	configuredKeys, _ := r.configuredAPIKeyIdentities()
+	for _, identity := range configuredKeys {
+		if _, exists := includedScopes[identity.CallerScope]; exists {
+			continue
+		}
+		costs, costErr := store.queryCostsByFilter(allRange, newUsageFilterFromIdentities("", []string{identity.APIKeyRef}))
+		if costErr != nil {
+			return jsonResponse(errorHTTPStatus(costErr), map[string]string{"error": costErr.Error()}), nil
+		}
+		items = append(items, APIKeyQuotaStatus{
+			ID:               identity.ID,
+			APIKeyRef:        identity.APIKeyRef,
+			MaskedKey:        identity.MaskedKey,
+			Label:            labels[identity.APIKeyRef],
+			UsedUSD:          costs.Summary.TotalUSD,
+			Requests:         costs.Summary.Requests,
+			PricedRequests:   costs.Summary.PricedRequests,
+			UnpricedRequests: costs.Summary.UnpricedRequests,
+			MissingPrices:    costs.MissingPrices,
+		})
+		includedScopes[identity.CallerScope] = struct{}{}
 	}
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Limited != items[j].Limited {
@@ -389,6 +417,22 @@ func (r *pluginRuntime) setQuotaResponse(request pluginapi.ManagementRequest) (p
 					MaskedKey: maskedAPIKey(plain), ResetAt: time.Unix(0, 0).UTC(),
 				}
 				break
+			}
+			if quota.ID == "" {
+				configuredKeys, syncErr := r.configuredAPIKeyIdentities()
+				if syncErr != nil {
+					return jsonResponse(http.StatusBadGateway, map[string]string{"error": "configured API key sync failed"}), nil
+				}
+				for _, identity := range configuredKeys {
+					if identity.ID != input.ID {
+						continue
+					}
+					quota = APIKeyQuota{
+						ID: identity.ID, CallerScope: identity.CallerScope, APIKeyRef: identity.APIKeyRef,
+						MaskedKey: identity.MaskedKey, ResetAt: time.Unix(0, 0).UTC(),
+					}
+					break
+				}
 			}
 			if quota.ID == "" {
 				return jsonResponse(http.StatusNotFound, map[string]string{"error": "observed API key not found"}), nil
