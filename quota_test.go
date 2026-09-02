@@ -263,7 +263,7 @@ func TestQuotaDashboardDoesNotEmbedSecrets(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "API Key 费用与额度") || strings.Contains(body, "caller_scope") {
 		t.Fatalf("unexpected dashboard response")
 	}
-	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000", `id="quotaDialog"`, "X-Quota-Mutation", "查看、设置、修改和已用置零均不需要密码", "/quotas/save", "/quotas/reset"} {
+	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000", `id="quotaDialog"`, ".form-field[hidden]{display:none}", "X-Quota-Mutation", "查看、设置、修改和已用置零均不需要密码", "/quotas/save", "/quotas/reset"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard is missing %q", want)
 		}
