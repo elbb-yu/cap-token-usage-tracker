@@ -31,13 +31,15 @@ type registration struct {
 }
 
 type registrationCapabilities struct {
-	UsagePlugin   bool `json:"usage_plugin"`
-	ManagementAPI bool `json:"management_api"`
+	UsagePlugin        bool `json:"usage_plugin"`
+	ManagementAPI      bool `json:"management_api"`
+	RequestInterceptor bool `json:"request_interceptor"`
 }
 
 type pluginRuntime struct {
 	lifecycleMu       sync.Mutex
 	priceSyncMu       sync.Mutex
+	quotaMu           sync.Mutex
 	mu                sync.RWMutex
 	store             *Store
 	config            Config
@@ -278,7 +280,7 @@ func pluginRegistration(schemaVersion uint32) registration {
 				{Name: "full_mode_session_ttl_minutes", Type: pluginapi.ConfigFieldTypeInteger, Description: "Full-mode session lifetime in minutes. Defaults to 15; range 1-1440. Tokens remain in page memory only and are not persisted."},
 			},
 		},
-		Capabilities: registrationCapabilities{UsagePlugin: true, ManagementAPI: true},
+		Capabilities: registrationCapabilities{UsagePlugin: true, ManagementAPI: true, RequestInterceptor: schemaVersion >= 2},
 	}
 }
 

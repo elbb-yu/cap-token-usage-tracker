@@ -24,6 +24,10 @@ func dispatchRPC(method string, request []byte) []byte {
 		result, err = runtimeState.reconfigure(request)
 	case pluginabi.MethodUsageHandle:
 		result, err = runtimeState.handleUsage(request)
+	case pluginabi.MethodRequestInterceptBefore:
+		result, err = runtimeState.interceptRequest(request, true)
+	case pluginabi.MethodRequestInterceptAfter:
+		result, err = runtimeState.interceptRequest(request, false)
 	case pluginabi.MethodManagementRegister:
 		result, err = runtimeState.registerManagement(request)
 	case pluginabi.MethodManagementHandle:

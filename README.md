@@ -21,6 +21,9 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 - 支持今天、最近 5 小时、最近 7 天、最近 30 天、本月及自定义日期时间范围
 - 趋势图支持分钟、小时、日、周、月聚合，以及滚轮缩放和平移
 - 提供 Token 趋势、模型占比、费用趋势、模型效率和逐请求明细
+- 提供独立的 API Key 额度页：无需管理密钥即可查看每个 Key 的掩码、实际费用、最高额度和剩余额度
+- 支持为原生下游 API Key 设置美元最高额度；新增、修改和重置额度均由 CLIProxyAPI 管理密钥保护
+- 有限额 Key 在达到额度或出现未定价模型时由请求拦截器拒绝后续调用，避免把未知价格当作 0 或通过换模型绕过额度
 - 支持来源、认证账号、模型和请求结果筛选
 - 支持请求表和维度表分页、排序、列显示偏好持久化
 - 完整模式支持多选 API Key 并按并集筛选、设置显示标签，并隔离不同加密密钥代际
@@ -37,6 +40,14 @@ CAP Token Usage Tracker 是 CLIProxyAPI 的持久化 Token 用量统计插件。
 ```text
 /v0/resource/plugins/cap-token-usage-tracker/dashboard
 ```
+
+API Key 费用与额度页也会注册到 Management Center 菜单：
+
+```text
+/v0/resource/plugins/cap-token-usage-tracker/quota-dashboard
+```
+
+该页面只公开 Key 标签/掩码、费用和额度状态，不公开 Key 明文、指纹或内部调用者标识。查看无需管理密钥；设置额度和每次重置额度时都必须重新输入 CLIProxyAPI 管理密钥。重置只开始一个新的额度统计周期，不删除历史请求记录。
 
 普通模式可以查看当前项目已有的非敏感统计数据，包括概览、趋势、费用估算、维度统计和逐请求元数据。它保留筛选、时间范围、刷新、表格分页、排序和列设置等日常查看功能。
 
@@ -204,6 +215,8 @@ plugins:
 | 方法 | 路径 | 用途 |
 |---|---|---|
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/dashboard` | 普通模式页面 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/quota-dashboard` | 每个 API Key 的掩码、费用、额度和余额页面 |
+| `GET` | `/v0/resource/plugins/cap-token-usage-tracker/quotas` | 读取脱敏后的逐 Key 额度状态 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats` | 兼容客户端的完整聚合统计 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/initial` | 首屏摘要、紧凑模型汇总和聚合趋势 |
 | `GET` | `/v0/resource/plugins/cap-token-usage-tracker/stats/trends` | 下采样后的逐模型趋势，供首屏后异步加载 |

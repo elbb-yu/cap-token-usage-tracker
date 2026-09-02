@@ -61,7 +61,7 @@ func TestRPCNegotiatesHostSchemaAndShutdown(t *testing.T) {
 				if err := json.Unmarshal(response.Result, &registered); err != nil {
 					t.Fatal(err)
 				}
-				if registered.SchemaVersion != test.wantSchema || !registered.Capabilities.UsagePlugin || !registered.Capabilities.ManagementAPI {
+				if registered.SchemaVersion != test.wantSchema || !registered.Capabilities.UsagePlugin || !registered.Capabilities.ManagementAPI || registered.Capabilities.RequestInterceptor != (test.wantSchema >= 2) {
 					t.Fatalf("unexpected %s registration: %+v", method, registered)
 				}
 				if registered.Metadata.GitHubRepository != "https://github.com/AITNR/cap-token-usage-tracker" {

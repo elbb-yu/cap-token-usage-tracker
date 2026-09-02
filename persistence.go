@@ -2408,6 +2408,9 @@ func (a *storeActor) reset() error {
 		if err := meta.Delete(apiKeyLabelsKey); err != nil {
 			return err
 		}
+		if err := meta.Delete(apiKeyQuotasKey); err != nil {
+			return err
+		}
 		return meta.Delete(lastUsedKey)
 	}); err != nil {
 		return fmt.Errorf("reset database: %w", err)

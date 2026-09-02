@@ -30,6 +30,7 @@ type registeredRoutes struct {
 	backupPath                string
 	restorePath               string
 	dashboardPath             string
+	quotaDashboardPath        string
 	fullDashboardPath         string
 	fullModeSessionPath       string
 	fullModeSessionRevokePath string
@@ -52,6 +53,9 @@ type registeredRoutes struct {
 	priceSyncPath             string
 	resourcePricesPath        string
 	resourcePreferencesPath   string
+	resourceQuotasPath        string
+	quotasPath                string
+	quotaResetPath            string
 }
 
 func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationResponse, error) {
@@ -71,6 +75,7 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		backupPath:                "/v0/management/plugins/" + pluginID + "/backup",
 		restorePath:               "/v0/management/plugins/" + pluginID + "/restore",
 		dashboardPath:             "/v0/resource/plugins/" + pluginID + "/dashboard",
+		quotaDashboardPath:        "/v0/resource/plugins/" + pluginID + "/quota-dashboard",
 		fullDashboardPath:         "/v0/resource/plugins/" + pluginID + "/full-dashboard",
 		fullModeSessionPath:       "/v0/management/plugins/" + pluginID + "/full-mode/session",
 		fullModeSessionRevokePath: "/v0/resource/plugins/" + pluginID + "/full-mode/session/revoke",
@@ -93,6 +98,9 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		priceSyncPath:             "/v0/management/plugins/" + pluginID + "/prices/sync",
 		resourcePricesPath:        "/v0/resource/plugins/" + pluginID + "/prices",
 		resourcePreferencesPath:   "/v0/resource/plugins/" + pluginID + "/preferences",
+		resourceQuotasPath:        "/v0/resource/plugins/" + pluginID + "/quotas",
+		quotasPath:                "/v0/management/plugins/" + pluginID + "/quotas",
+		quotaResetPath:            "/v0/management/plugins/" + pluginID + "/quotas/reset",
 	}
 	r.mu.Lock()
 	r.routes = routes
@@ -114,6 +122,16 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 				Method:      http.MethodPost,
 				Path:        "/plugins/" + pluginID + "/reset",
 				Description: "Reset all persisted token usage statistics.",
+			},
+			{
+				Method:      http.MethodPut,
+				Path:        "/plugins/" + pluginID + "/quotas",
+				Description: "Create or update a per-downstream-API-key USD quota.",
+			},
+			{
+				Method:      http.MethodPost,
+				Path:        "/plugins/" + pluginID + "/quotas/reset",
+				Description: "Reset one API key quota usage window.",
 			},
 			{
 				Method:      http.MethodPut,
@@ -142,6 +160,12 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 				Menu:        "Token 用量",
 				Description: "查看持久化的 Token 用量、请求和延迟统计。",
 			},
+			{
+				Path:        "/quota-dashboard",
+				Menu:        "API Key 额度",
+				Description: "无需管理密钥查看每个 API Key 的费用、最高额度和剩余额度。",
+			},
+			{Path: "/quotas", Description: "Read masked per-API-key cost and quota status."},
 			{Path: "/full-dashboard", Description: "Full-mode dashboard shell without protected data."},
 			{Path: "/full-mode/data", Description: "Capability-protected full-mode data."},
 			{Path: "/full-mode/api-key-labels", Description: "Capability-protected API key label management. Send JSON in the X-API-Key-Label header with GET requests."},
@@ -213,6 +237,16 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return dashboardResponse(), nil
+	case routes.quotaDashboardPath:
+		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return quotaDashboardResponse(routes), nil
+	case routes.resourceQuotasPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		return r.quotaStatusesResponse()
 	case routes.fullDashboardPath:
 		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil
@@ -324,6 +358,16 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 			return methodNotAllowed(http.MethodPut), nil
 		}
 		return r.savePricesResponse(request)
+	case routes.quotasPath:
+		if !strings.EqualFold(request.Method, http.MethodPut) {
+			return methodNotAllowed(http.MethodPut), nil
+		}
+		return r.setQuotaResponse(request)
+	case routes.quotaResetPath:
+		if !strings.EqualFold(request.Method, http.MethodPost) {
+			return methodNotAllowed(http.MethodPost), nil
+		}
+		return r.resetQuotaResponse(request)
 	case routes.priceSyncPath:
 		if !strings.EqualFold(request.Method, http.MethodPost) {
 			return methodNotAllowed(http.MethodPost), nil
