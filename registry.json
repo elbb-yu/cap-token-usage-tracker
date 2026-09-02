@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "plugins": [
+    {
+      "id": "cap-token-usage-tracker",
+      "name": "CAP Token Usage Tracker",
+      "description": "Tracks actual token usage and official-model cost per downstream API key, with password-gated per-key USD quotas and resettable quota windows.",
+      "author": "elbb-yu",
+      "repository": "https://github.com/elbb-yu/cap-token-usage-tracker",
+      "homepage": "https://github.com/elbb-yu/cap-token-usage-tracker",
+      "license": "MIT",
+      "tags": ["usage", "cost", "quota", "management"]
+    }
+  ]
+}
