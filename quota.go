@@ -232,15 +232,45 @@ func (r *pluginRuntime) quotaStatus(quota APIKeyQuota, now time.Time) (APIKeyQuo
 	return status, nil
 }
 
+func (r *pluginRuntime) loadReconciledAPIKeyQuotas(store *Store, configured []configuredAPIKeyIdentity, authoritative bool) (map[string]APIKeyQuota, error) {
+	r.quotaMu.Lock()
+	defer r.quotaMu.Unlock()
+	quotas, err := store.loadAPIKeyQuotas()
+	if err != nil || !authoritative {
+		return quotas, err
+	}
+	active := make(map[string]struct{}, len(configured))
+	for _, identity := range configured {
+		active[identity.CallerScope] = struct{}{}
+	}
+	changed := false
+	for scope := range quotas {
+		if _, exists := active[scope]; exists {
+			continue
+		}
+		delete(quotas, scope)
+		changed = true
+	}
+	if changed {
+		if err := store.saveAPIKeyQuotas(quotas); err != nil {
+			return nil, err
+		}
+	}
+	return quotas, nil
+}
+
 func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, error) {
 	r.mu.RLock()
 	store := r.store
 	crypto := r.crypto
+	config := r.config
 	r.mu.RUnlock()
 	if store == nil {
 		return jsonResponse(http.StatusServiceUnavailable, map[string]string{"error": "storage is not initialized"}), nil
 	}
-	quotas, err := store.loadAPIKeyQuotas()
+	configuredKeys, configuredKeysErr := r.configuredAPIKeyIdentities()
+	configuredKeysAuthoritative := config.ManagementAPIURL != "" && config.ManagementAPIKey != "" && configuredKeysErr == nil
+	quotas, err := r.loadReconciledAPIKeyQuotas(store, configuredKeys, configuredKeysAuthoritative)
 	if err != nil {
 		return jsonResponse(errorHTTPStatus(err), map[string]string{"error": err.Error()}), nil
 	}
@@ -249,6 +279,38 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 		return jsonResponse(errorHTTPStatus(err), map[string]string{"error": err.Error()}), nil
 	}
 	now := time.Now().UTC()
+	allRange := usageRange{Name: "all"}
+	if configuredKeysAuthoritative {
+		items := make([]APIKeyQuotaStatus, 0, len(configuredKeys))
+		for _, identity := range configuredKeys {
+			if quota, limited := quotas[identity.CallerScope]; limited {
+				if quota.Label == "" {
+					quota.Label = labels[quota.APIKeyRef]
+				}
+				status, statusErr := r.quotaStatus(quota, now)
+				if statusErr != nil {
+					return jsonResponse(errorHTTPStatus(statusErr), map[string]string{"error": statusErr.Error()}), nil
+				}
+				items = append(items, status)
+				continue
+			}
+			costs, costErr := store.queryCostsByFilter(allRange, newUsageFilterFromIdentities("", []string{identity.APIKeyRef}))
+			if costErr != nil {
+				return jsonResponse(errorHTTPStatus(costErr), map[string]string{"error": costErr.Error()}), nil
+			}
+			items = append(items, APIKeyQuotaStatus{
+				ID: identity.ID, APIKeyRef: identity.APIKeyRef, MaskedKey: identity.MaskedKey,
+				Label: labels[identity.APIKeyRef], UsedUSD: costs.Summary.TotalUSD,
+				Requests: costs.Summary.Requests, PricedRequests: costs.Summary.PricedRequests,
+				UnpricedRequests: costs.Summary.UnpricedRequests, MissingPrices: costs.MissingPrices,
+			})
+		}
+		sortQuotaStatuses(items)
+		return jsonResponse(http.StatusOK, APIKeyQuotasResponse{
+			SchemaVersion: 1, GeneratedAt: now, Currency: "USD",
+			EstimateBasis: "current_price_book", Items: items,
+		}), nil
+	}
 	items := make([]APIKeyQuotaStatus, 0, len(quotas))
 	includedScopes := make(map[string]struct{}, len(quotas))
 	for _, quota := range quotas {
@@ -266,7 +328,6 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 	// Include observed, currently unlimited keys so the page can show every key
 	// that has actually produced a usage record. Plaintext is only used in memory
 	// to derive the same caller scope and a short masked display value.
-	allRange := usageRange{Name: "all"}
 	stats, err := store.queryInitialStatsByFilter(allRange, usageFilter{})
 	if err == nil && crypto.enabled {
 		_, generations := store.APIKeyCryptoState()
@@ -309,7 +370,7 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 	// The host's configured key list can contain a brand-new key with no usage
 	// record yet. Merge those in-memory identities so both public dashboards
 	// show it immediately without persisting or returning plaintext keys.
-	configuredKeys, _ := r.configuredAPIKeyIdentities()
+	configuredKeys, _ = r.configuredAPIKeyIdentities()
 	for _, identity := range configuredKeys {
 		if _, exists := includedScopes[identity.CallerScope]; exists {
 			continue
@@ -331,6 +392,17 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 		})
 		includedScopes[identity.CallerScope] = struct{}{}
 	}
+	sortQuotaStatuses(items)
+	return jsonResponse(http.StatusOK, APIKeyQuotasResponse{
+		SchemaVersion: 1,
+		GeneratedAt:   now,
+		Currency:      "USD",
+		EstimateBasis: "current_price_book",
+		Items:         items,
+	}), nil
+}
+
+func sortQuotaStatuses(items []APIKeyQuotaStatus) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].Limited != items[j].Limited {
 			return items[i].Limited
@@ -340,13 +412,6 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 		}
 		return items[i].MaskedKey < items[j].MaskedKey
 	})
-	return jsonResponse(http.StatusOK, APIKeyQuotasResponse{
-		SchemaVersion: 1,
-		GeneratedAt:   now,
-		Currency:      "USD",
-		EstimateBasis: "current_price_book",
-		Items:         items,
-	}), nil
 }
 
 func (r *pluginRuntime) setQuotaResponse(request pluginapi.ManagementRequest) (pluginapi.ManagementResponse, error) {
