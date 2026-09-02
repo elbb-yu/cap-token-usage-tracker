@@ -263,4 +263,9 @@ func TestQuotaDashboardDoesNotEmbedSecrets(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "API Key 费用与额度") || strings.Contains(body, "caller_scope") {
 		t.Fatalf("unexpected dashboard response")
 	}
+	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("dashboard is missing %q", want)
+		}
+	}
 }
