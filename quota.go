@@ -365,7 +365,40 @@ func (r *pluginRuntime) setQuotaResponse(request pluginapi.ManagementRequest) (p
 			}
 		}
 		if quota.ID == "" {
-			return jsonResponse(http.StatusNotFound, map[string]string{"error": "quota not found"}), nil
+			// The public dashboard already knows the opaque quota ID for each
+			// observed key. Resolve that ID server-side so an administrator can
+			// set the first limit without re-entering the plaintext API key.
+			stats, statsErr := store.queryInitialStatsByFilter(usageRange{Name: "all"}, usageFilter{})
+			if statsErr != nil {
+				return jsonResponse(errorHTTPStatus(statsErr), map[string]string{"error": statsErr.Error()}), nil
+			}
+			_, generations := store.APIKeyCryptoState()
+			for _, option := range stats.APIKeys {
+				metadata, ok := generations[option.Generation]
+				if !ok || metadata.KeyID != crypto.keyID || option.Key == "" {
+					continue
+				}
+				plain, decryptErr := decryptAPIKeyForGeneration(crypto, option.Key, option.Hash, option.Generation)
+				if decryptErr != nil || plain == "" {
+					continue
+				}
+				scope := downstreamCallerScope(plain)
+				if quotaID(scope) != input.ID {
+					continue
+				}
+				ref := option.Ref
+				if ref == "" {
+					ref = apiKeyRef(option.Generation, option.Hash)
+				}
+				quota = APIKeyQuota{
+					ID: input.ID, CallerScope: scope, APIKeyRef: ref,
+					MaskedKey: maskedAPIKey(plain), ResetAt: now,
+				}
+				break
+			}
+			if quota.ID == "" {
+				return jsonResponse(http.StatusNotFound, map[string]string{"error": "observed API key not found"}), nil
+			}
 		}
 	} else {
 		if input.APIKey == "" {

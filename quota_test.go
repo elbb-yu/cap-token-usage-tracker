@@ -157,6 +157,42 @@ func TestUnlimitedKeyShowsHistoricalCostWithoutPlaintextLeak(t *testing.T) {
 	}
 }
 
+func TestSetQuotaForObservedKeyByOpaqueID(t *testing.T) {
+	runtime, store := newQuotaTestRuntime(t)
+	if _, err := store.SaveModelPrices(map[string]ModelPrice{"known": {Input: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	const apiKey = "sk-observed-test-key-123456789"
+	usage, _ := json.Marshal(pluginapi.UsageRecord{
+		Provider: "openai", Model: "known", APIKey: apiKey, RequestedAt: time.Now().UTC(),
+		Detail: pluginapi.UsageDetail{InputTokens: 1_000_000, TotalTokens: 1_000_000},
+	})
+	if _, err := runtime.handleUsage(usage); err != nil {
+		t.Fatal(err)
+	}
+	statusResponse, err := runtime.quotaStatusesResponse()
+	if err != nil || statusResponse.StatusCode != http.StatusOK {
+		t.Fatalf("quota status = %d, %v", statusResponse.StatusCode, err)
+	}
+	var statuses APIKeyQuotasResponse
+	if err := json.Unmarshal(statusResponse.Body, &statuses); err != nil || len(statuses.Items) != 1 {
+		t.Fatalf("quota items = %+v, %v", statuses.Items, err)
+	}
+	set, err := runtime.setQuotaResponse(quotaManagementRequest(t, quotaMutationRequest{
+		ID: statuses.Items[0].ID, Label: "observed", LimitUSD: 20,
+	}))
+	if err != nil || set.StatusCode != http.StatusOK {
+		t.Fatalf("set observed quota = %d, %v, %s", set.StatusCode, err, set.Body)
+	}
+	quota := mustQuotaForTest(t, store, downstreamCallerScope(apiKey))
+	if quota.MaskedKey != maskedAPIKey(apiKey) || quota.Label != "observed" || quota.LimitUSD != 20 {
+		t.Fatalf("observed quota = %+v", quota)
+	}
+	if strings.Contains(string(set.Body), apiKey) {
+		t.Fatal("set response leaked the plaintext API key")
+	}
+}
+
 func TestQuotaRejectsUnknownModelAndPasswordResetStartsNewWindow(t *testing.T) {
 	runtime, store := newQuotaTestRuntime(t)
 	if _, err := store.SaveModelPrices(map[string]ModelPrice{
