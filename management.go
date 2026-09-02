@@ -54,6 +54,8 @@ type registeredRoutes struct {
 	resourcePricesPath        string
 	resourcePreferencesPath   string
 	resourceQuotasPath        string
+	resourceQuotaSavePath     string
+	resourceQuotaResetPath    string
 	quotasPath                string
 	quotaResetPath            string
 }
@@ -99,6 +101,8 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 		resourcePricesPath:        "/v0/resource/plugins/" + pluginID + "/prices",
 		resourcePreferencesPath:   "/v0/resource/plugins/" + pluginID + "/preferences",
 		resourceQuotasPath:        "/v0/resource/plugins/" + pluginID + "/quotas",
+		resourceQuotaSavePath:     "/v0/resource/plugins/" + pluginID + "/quotas/save",
+		resourceQuotaResetPath:    "/v0/resource/plugins/" + pluginID + "/quotas/reset",
 		quotasPath:                "/v0/management/plugins/" + pluginID + "/quotas",
 		quotaResetPath:            "/v0/management/plugins/" + pluginID + "/quotas/reset",
 	}
@@ -166,6 +170,8 @@ func (r *pluginRuntime) registerManagement(raw []byte) (managementRegistrationRe
 				Description: "无需管理密钥查看每个 API Key 的费用、最高额度和剩余额度。",
 			},
 			{Path: "/quotas", Description: "Read masked per-API-key cost and quota status."},
+			{Path: "/quotas/save", Description: "Create or update a per-key quota without a management password."},
+			{Path: "/quotas/reset", Description: "Reset a per-key quota window without a management password."},
 			{Path: "/full-dashboard", Description: "Full-mode dashboard shell without protected data."},
 			{Path: "/full-mode/data", Description: "Capability-protected full-mode data."},
 			{Path: "/full-mode/api-key-labels", Description: "Capability-protected API key label management. Send JSON in the X-API-Key-Label header with GET requests."},
@@ -247,6 +253,24 @@ func (r *pluginRuntime) dispatchManagement(request pluginapi.ManagementRequest, 
 			return methodNotAllowed(http.MethodGet), nil
 		}
 		return r.quotaStatusesResponse()
+	case routes.resourceQuotaSavePath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		request.Body = []byte(request.Headers.Get("X-Quota-Mutation"))
+		if len(request.Body) == 0 || len(request.Body) > 16<<10 {
+			return jsonResponse(http.StatusBadRequest, map[string]string{"error": "quota mutation is missing or too large"}), nil
+		}
+		return r.setQuotaResponse(request)
+	case routes.resourceQuotaResetPath:
+		if !strings.EqualFold(request.Method, http.MethodGet) {
+			return methodNotAllowed(http.MethodGet), nil
+		}
+		request.Body = []byte(request.Headers.Get("X-Quota-Mutation"))
+		if len(request.Body) == 0 || len(request.Body) > 16<<10 {
+			return jsonResponse(http.StatusBadRequest, map[string]string{"error": "quota mutation is missing or too large"}), nil
+		}
+		return r.resetQuotaResponse(request)
 	case routes.fullDashboardPath:
 		if request.Method != "" && !strings.EqualFold(request.Method, http.MethodGet) {
 			return methodNotAllowed(http.MethodGet), nil

@@ -256,16 +256,74 @@ func mustQuotaForTest(t *testing.T, store *Store, scope string) APIKeyQuota {
 func TestQuotaDashboardDoesNotEmbedSecrets(t *testing.T) {
 	routes := registeredRoutes{
 		dashboardPath: "/dashboard", resourceQuotasPath: "/quotas",
-		quotasPath: "/manage/quotas", quotaResetPath: "/manage/quotas/reset",
+		resourceQuotaSavePath: "/quotas/save", resourceQuotaResetPath: "/quotas/reset",
 	}
 	response := quotaDashboardResponse(routes)
 	body := string(response.Body)
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "API Key 费用与额度") || strings.Contains(body, "caller_scope") {
 		t.Fatalf("unexpected dashboard response")
 	}
-	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000"} {
+	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000", `id="quotaDialog"`, "X-Quota-Mutation", "查看、设置、修改和已用置零均不需要密码", "/quotas/save", "/quotas/reset"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard is missing %q", want)
 		}
+	}
+	for _, forbidden := range []string{"prompt(", "confirm(", "Authorization", "quotaManagementKey", "管理密码"} {
+		if strings.Contains(body, forbidden) {
+			t.Fatalf("dashboard unexpectedly contains %q", forbidden)
+		}
+	}
+}
+
+func TestPublicQuotaMutationRoutesNeedNoPassword(t *testing.T) {
+	runtime, store := newQuotaTestRuntime(t)
+	if _, err := store.SaveModelPrices(map[string]ModelPrice{"known": {Input: 1}}); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(pluginapi.ManagementRegistrationRequest{ResourceBasePath: "/v0/resource/plugins/cap-token-usage-tracker"})
+	if _, err := runtime.registerManagement(raw); err != nil {
+		t.Fatal(err)
+	}
+	const apiKey = "sk-public-quota-route-test-123456789"
+	usage, _ := json.Marshal(pluginapi.UsageRecord{
+		Provider: "openai", Model: "known", APIKey: apiKey, RequestedAt: time.Now().UTC(),
+		Detail: pluginapi.UsageDetail{InputTokens: 1_000_000, TotalTokens: 1_000_000},
+	})
+	if _, err := runtime.handleUsage(usage); err != nil {
+		t.Fatal(err)
+	}
+	statusResponse, err := runtime.quotaStatusesResponse()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var statuses APIKeyQuotasResponse
+	if err := json.Unmarshal(statusResponse.Body, &statuses); err != nil || len(statuses.Items) != 1 {
+		t.Fatalf("quota items = %+v, %v", statuses.Items, err)
+	}
+
+	mutation, _ := json.Marshal(quotaMutationRequest{ID: statuses.Items[0].ID, Label: "public", LimitUSD: 20})
+	set, err := runtime.dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet, Path: runtime.routes.resourceQuotaSavePath,
+		Headers: http.Header{"X-Quota-Mutation": []string{string(mutation)}},
+	}, runtime.routes)
+	if err != nil || set.StatusCode != http.StatusOK {
+		t.Fatalf("public set quota = %d, %v, %s", set.StatusCode, err, set.Body)
+	}
+	quota := mustQuotaForTest(t, store, downstreamCallerScope(apiKey))
+	if quota.LimitUSD != 20 || quota.Label != "public" {
+		t.Fatalf("public quota = %+v", quota)
+	}
+
+	resetMutation, _ := json.Marshal(quotaMutationRequest{ID: statuses.Items[0].ID})
+	reset, err := runtime.dispatchManagement(pluginapi.ManagementRequest{
+		Method: http.MethodGet, Path: runtime.routes.resourceQuotaResetPath,
+		Headers: http.Header{"X-Quota-Mutation": []string{string(resetMutation)}},
+	}, runtime.routes)
+	if err != nil || reset.StatusCode != http.StatusOK {
+		t.Fatalf("public reset quota = %d, %v, %s", reset.StatusCode, err, reset.Body)
+	}
+	status, err := runtime.quotaStatus(mustQuotaForTest(t, store, downstreamCallerScope(apiKey)), time.Now().UTC())
+	if err != nil || status.UsedUSD != 0 || status.RemainingUSD != 20 {
+		t.Fatalf("public reset status = %+v, %v", status, err)
 	}
 }

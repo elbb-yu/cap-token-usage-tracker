@@ -79,6 +79,29 @@ func TestDashboardUsesBoundedSafeRendering(t *testing.T) {
 	}
 }
 
+func TestDashboardShowsLiveAPIKeyQuotaOverview(t *testing.T) {
+	for name, html := range map[string]string{"public": dashboardHTML, "full": fullDashboardHTML} {
+		for _, required := range []string{
+			`id="quotaOverview"`,
+			`id="quotaManageLink"`,
+			`var quotaURL=resourceBase+'/quotas'`,
+			`function renderQuotaOverview`,
+			`function startQuotaRefresh`,
+			`quotaRefreshTimer=setInterval`,
+			`quota-progress-fill`,
+			`每 5 秒更新`,
+			`已用`,
+			`最高`,
+			`剩余`,
+			`5000`,
+		} {
+			if !strings.Contains(html, required) {
+				t.Fatalf("%s dashboard is missing quota overview %q", name, required)
+			}
+		}
+	}
+}
+
 func TestDashboardColumnMenusCanOverflowShortTables(t *testing.T) {
 	html := dashboardHTML
 	for _, required := range []string{
