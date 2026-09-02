@@ -225,10 +225,7 @@ func (r *pluginRuntime) quotaStatus(quota APIKeyQuota, now time.Time) (APIKeyQuo
 		UnpricedRequests: costs.Summary.UnpricedRequests,
 		MissingPrices:    costs.MissingPrices,
 	}
-	if status.UnpricedRequests > 0 {
-		status.Blocked = true
-		status.BlockReason = "存在未定价模型，费用不完整"
-	} else if status.UsedUSD >= status.LimitUSD {
+	if status.UsedUSD >= status.LimitUSD {
 		status.Blocked = true
 		status.BlockReason = "已达到最高额度"
 	}
@@ -302,9 +299,6 @@ func (r *pluginRuntime) quotaStatusesResponse() (pluginapi.ManagementResponse, e
 				PricedRequests:   costs.Summary.PricedRequests,
 				UnpricedRequests: costs.Summary.UnpricedRequests,
 				MissingPrices:    costs.MissingPrices,
-			}
-			if status.UnpricedRequests > 0 {
-				status.BlockReason = "存在未定价模型，费用不完整"
 			}
 			items = append(items, status)
 		}
@@ -512,18 +506,6 @@ func (r *pluginRuntime) interceptRequest(raw []byte, beforeAuth bool) (pluginapi
 	quota, limited := quotas[scope]
 	if !limited {
 		return pluginapi.RequestInterceptResponse{}, nil
-	}
-	priceBook, err := store.QueryPriceBook()
-	if err != nil {
-		return pluginapi.RequestInterceptResponse{}, err
-	}
-	model := strings.TrimSpace(request.Model)
-	if model == "" {
-		model = strings.TrimSpace(request.RequestedModel)
-	}
-	resolver := newModelPriceResolver(priceBook.Prices, priceBook.SyncSettings)
-	if _, priced := resolver.resolve(model); !priced {
-		return quotaDeniedResponse("该模型尚未配置价格；为防止绕过额度，有限额的 API key 已暂停调用", nil), nil
 	}
 	status, err := r.quotaStatus(quota, time.Now().UTC())
 	if err != nil {

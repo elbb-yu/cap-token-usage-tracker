@@ -197,7 +197,7 @@ func TestSetQuotaForObservedKeyByOpaqueID(t *testing.T) {
 	}
 }
 
-func TestQuotaRejectsUnknownModelAndPasswordResetStartsNewWindow(t *testing.T) {
+func TestQuotaAllowsUnknownModelAndResetStartsNewWindow(t *testing.T) {
 	runtime, store := newQuotaTestRuntime(t)
 	if _, err := store.SaveModelPrices(map[string]ModelPrice{
 		"known": {Input: 1, Output: 1, Source: priceSourceManual},
@@ -219,9 +219,20 @@ func TestQuotaRejectsUnknownModelAndPasswordResetStartsNewWindow(t *testing.T) {
 	unknown, _ := json.Marshal(pluginapi.RequestInterceptRequest{
 		Model: "future-unpriced-model", Metadata: map[string]any{"caller_scope": downstreamCallerScope(apiKey)},
 	})
-	denied, err := runtime.interceptRequest(unknown, true)
-	if err != nil || !denied.Terminate || !strings.Contains(string(denied.ResponseBody), "尚未配置价格") {
-		t.Fatalf("unknown model response = %+v, %v", denied, err)
+	allowed, err := runtime.interceptRequest(unknown, true)
+	if err != nil || allowed.Terminate {
+		t.Fatalf("unpriced model was blocked: %+v, %v", allowed, err)
+	}
+	unknownUsage, _ := json.Marshal(pluginapi.UsageRecord{
+		Model: "future-unpriced-model", APIKey: apiKey, RequestedAt: time.Now().UTC(),
+		Detail: pluginapi.UsageDetail{InputTokens: 1_000_000, TotalTokens: 1_000_000},
+	})
+	if _, err := runtime.handleUsage(unknownUsage); err != nil {
+		t.Fatal(err)
+	}
+	unpricedStatus, err := runtime.quotaStatus(mustQuotaForTest(t, store, downstreamCallerScope(apiKey)), time.Now().UTC())
+	if err != nil || unpricedStatus.Blocked || unpricedStatus.UsedUSD != 0 || unpricedStatus.UnpricedRequests != 1 {
+		t.Fatalf("unexpected unpriced quota status: %+v, %v", unpricedStatus, err)
 	}
 
 	usage, _ := json.Marshal(pluginapi.UsageRecord{
@@ -267,12 +278,12 @@ func TestQuotaDashboardDoesNotEmbedSecrets(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(body, "API Key 费用与额度") || strings.Contains(body, "caller_scope") {
 		t.Fatalf("unexpected dashboard response")
 	}
-	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000", `id="quotaDialog"`, `.form-field[hidden],.check-field[hidden]{display:none}`, `id="resetWithSave"`, "保存额度时，同时将当前已用额度置零", "resetAfterSave", "X-Quota-Mutation", "查看、设置、修改和已用置零均不需要密码", "/quotas/save", "/quotas/reset"} {
+	for _, want := range []string{"data-set", "已用置零", "使用进度", "每 5 秒自动更新", "5000", `id="quotaDialog"`, `.form-field[hidden],.check-field[hidden]{display:none}`, `id="resetWithSave"`, "保存额度时，同时将当前已用额度置零", "未定价模型会继续放行", "resetAfterSave", "X-Quota-Mutation", "查看、设置、修改和已用置零均不需要密码", "/quotas/save", "/quotas/reset"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("dashboard is missing %q", want)
 		}
 	}
-	for _, forbidden := range []string{"prompt(", "confirm(", "Authorization", "quotaManagementKey", "管理密码"} {
+	for _, forbidden := range []string{"prompt(", "confirm(", "Authorization", "quotaManagementKey", "管理密码", "未定价模型会被暂停"} {
 		if strings.Contains(body, forbidden) {
 			t.Fatalf("dashboard unexpectedly contains %q", forbidden)
 		}
