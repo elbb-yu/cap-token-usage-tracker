@@ -392,7 +392,7 @@ func (r *pluginRuntime) setQuotaResponse(request pluginapi.ManagementRequest) (p
 				}
 				quota = APIKeyQuota{
 					ID: input.ID, CallerScope: scope, APIKeyRef: ref,
-					MaskedKey: maskedAPIKey(plain), ResetAt: now,
+					MaskedKey: maskedAPIKey(plain), ResetAt: time.Unix(0, 0).UTC(),
 				}
 				break
 			}
@@ -409,7 +409,7 @@ func (r *pluginRuntime) setQuotaResponse(request pluginapi.ManagementRequest) (p
 		ref := apiKeyRef(generation, fingerprint)
 		quota = APIKeyQuota{
 			ID: quotaID(scope), CallerScope: scope, APIKeyRef: ref,
-			MaskedKey: maskedAPIKey(input.APIKey), ResetAt: now,
+			MaskedKey: maskedAPIKey(input.APIKey), ResetAt: time.Unix(0, 0).UTC(),
 		}
 		if existing, exists := quotas[scope]; exists {
 			quota.ResetAt = existing.ResetAt

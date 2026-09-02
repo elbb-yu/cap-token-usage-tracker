@@ -188,6 +188,10 @@ func TestSetQuotaForObservedKeyByOpaqueID(t *testing.T) {
 	if quota.MaskedKey != maskedAPIKey(apiKey) || quota.Label != "observed" || quota.LimitUSD != 20 {
 		t.Fatalf("observed quota = %+v", quota)
 	}
+	status, err := runtime.quotaStatus(quota, time.Now().UTC())
+	if err != nil || status.UsedUSD != 1 || status.RemainingUSD != 19 {
+		t.Fatalf("setting initial quota reset historical usage: %+v, %v", status, err)
+	}
 	if strings.Contains(string(set.Body), apiKey) {
 		t.Fatal("set response leaked the plaintext API key")
 	}
@@ -312,6 +316,10 @@ func TestPublicQuotaMutationRoutesNeedNoPassword(t *testing.T) {
 	quota := mustQuotaForTest(t, store, downstreamCallerScope(apiKey))
 	if quota.LimitUSD != 20 || quota.Label != "public" {
 		t.Fatalf("public quota = %+v", quota)
+	}
+	beforeReset, err := runtime.quotaStatus(quota, time.Now().UTC())
+	if err != nil || beforeReset.UsedUSD != 1 || beforeReset.RemainingUSD != 19 {
+		t.Fatalf("public quota reset usage while setting the limit: %+v, %v", beforeReset, err)
 	}
 
 	resetMutation, _ := json.Marshal(quotaMutationRequest{ID: statuses.Items[0].ID})
